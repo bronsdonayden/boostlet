@@ -73,24 +73,44 @@ export class NiiVue extends Framework {
       // set width and height accordingly
 
       let v =  this.instance.volumes[0];
-
-      // TODO this gives us the FULL VOLUME
-      // but we want only the current Slice
-      let start = [0,0,0];
+      let currentSlice = this.instance.opts.sliceType;
+      let currentCrossHairPos = this.instance.scene.crosshairPos;
+      
+      
+      // Default to full volume
+      let start = [0, 0, 0];
       let end = [v.dims[1], v.dims[2], v.dims[3]];
 
-      pixels = v.getVolumeData(start, end);
-      width = v.dims[1]; // TODO we need to figure out which view we are actually using or shall we work in 3D?
-      height = v.dims[2]; 
+      if(currentSlice == 0){
+        let z_index = Math.floor(currentCrossHairPos[2] * v.dims[3]);
+        width = v.dims[1];
+        height = v.dims[2];
+        start = [0, 0, z_index];
+        end = [v.dims[1], v.dims[2], z_index + 1];
+      }
+      else if(currentSlice == 1){
+        let y_index = Math.floor(currentCrossHairPos[1] * v.dims[2]);
+        width = v.dims[1];
+        height = v.dims[3];
+        start = [0, y_index, 0];
+        end = [v.dims[1], y_index + 1 , v.dims[3]];
+      }
+      else if(currentSlice == 2){
+        let x_index = Math.floor(currentCrossHairPos[0] * v.dims[1]);
+        width = v.dims[2];
+        height = v.dims[3];
+        start = [x_index, 0, 0];
+        end = [x_index + 1, v.dims[2], v.dims[3]];
 
-      // NOTE: THIS ONLY WORKS IN SOME CASES
-      // WE REALLY NEED TO DO THE FOLLOWING TO FIX
-      // 1. figure out which view is requested
-      // 2. update start and end based on that view
-      // 3. set width and height based on that view
+      }
+      pixels = v.getVolumeData(start, end)[0];
 
     }
-
+    // multiplanar fallback
+    if (width === null) {
+      width = v.dims[1];
+      height = v.dims[2];
+    }
 
     return {'data':pixels, 'width':width, 'height':height};
 
