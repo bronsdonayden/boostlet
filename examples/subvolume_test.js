@@ -1,6 +1,6 @@
 script = document.createElement("script");
 script.type = "text/javascript";
-script.src = "/dist/boostlet.min.js"; // points to local version. Fix later
+script.src = "https://boostlet.org/dist/boostlet.min.js"; 
 script.onload = run;
 document.head.appendChild(script);
 eval(script);
