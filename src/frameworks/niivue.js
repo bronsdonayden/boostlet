@@ -120,6 +120,23 @@ export class NiiVue extends Framework {
 
   }
 
+
+
+  get_subvolume(start, end) {
+    const [data, dims] = this.instance.volumes[0].getVolumeData(start, end);
+    return { data, dims };
+  }
+
+  get_dims(){
+    const v = this.instance.volumes[0];
+    const currentSlice = this.instance.opts.sliceType;
+
+    if(currentSlice == 0) return [v.dims[1], v.dims[2], 1]; //axial
+    if(currentSlice == 1 ) return [v.dims[1], v.dims[3], 1 ]; // coronal
+    if(currentSlice == 2) return [v.dims[2], v.dims[3], 1 ]; // saggital
+    return [v.dims[1], v.dims[2], 1]; // multiplanar fallback
+  }  
+
   /**
    * Sets the NiiVue.js image.
    * 
