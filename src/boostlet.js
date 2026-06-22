@@ -112,6 +112,14 @@ export class Boostlet {
 
   }
 
+  get_dims() {
+  return this.framework.get_dims();
+  }
+
+  get_subvolume(start, end) {
+    return this.framework.get_subvolume(start, end);
+  }
+
   /**
    * Encode raw image data to PNG.
    */
