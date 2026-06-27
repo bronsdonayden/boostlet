@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Boostlet — Subvolume Matrix</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: monospace;
+    }
+
+    #viewer {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #select-btn {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #222;
+      color: #fff;
+      border: 1px solid #555;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: 12px;
+      z-index: 20;
+    }
+
+    #select-btn:hover { background: #333; }
+    #select-btn:disabled { color: #555; cursor: default; }
+
+    #matrix-panel {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 20;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    #matrix-info {
+      color: #aaa;
+      font-size: 11px;
+    }
+
+    #matrix-canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      cursor: crosshair;
+    }
+
+    #tooltip {
+      position: fixed;
+      background: rgba(0,0,0,0.85);
+      color: #fff;
+      border: 1px solid #444;
+      padding: 3px 7px;
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 11px;
+      pointer-events: none;
+      display: none;
+      z-index: 9999;
+    }
+  </style>
+</head>
+<body>
+
+  <canvas id="viewer"></canvas>
+
+  <button id="select-btn" disabled>loading...</button>
+
+  <div id="matrix-panel">
+    <span id="matrix-info"></span>
+    <canvas id="matrix-canvas"></canvas>
+  </div>
+
+  <div id="tooltip"></div>
+
+  <script src="../tests/niivue/js/niivue.umd.js"></script>
+  <script>
+    // NiiVue
+    const nv = new niivue.Niivue({
+      textHeight:      0.02,
+      crosshairColor:  [0, 1, 1, 0.1],
+      crosshairWidth:  0.2,
+      show3Dcrosshair: true,
+    });
+
+    window.nv = nv; // expose for Boostlet detection
+
+    nv.attachToCanvas(document.getElementById('viewer'));
+    nv.setSliceType(nv.sliceTypeCoronal);
+
+    nv.loadVolumes([{ url: 'https://danielhaehn.com/brain.nii', colorMap: 'gray' }])
+      .then(() => {
+        const btn = document.getElementById('select-btn');
+        btn.disabled    = false;
+        btn.textContent = 'select region';
+      });
+
+    // Boostlet
+    const s    = document.createElement('script');
+    s.src      = 'https://boostlet.org/dist/boostlet.min.js';
+    s.onload   = () => Boostlet.init();
+    document.head.appendChild(s);
+
+    // Matrix
+    const matrixCanvas = document.getElementById('matrix-canvas');
+    const ctx          = matrixCanvas.getContext('2d');
+    const tooltip      = document.getElementById('tooltip');
+    const MAX_DISPLAY  = 64;
+
+    let state = { pixels: null, cols: 0, rows: 0, cellSize: 1 };
+
+    function renderMatrix(pixels, cols, rows) {
+      let min = Infinity, max = -Infinity;
+      for (let i = 0; i < pixels.length; i++) {
+        if (pixels[i] < min) min = pixels[i];
+        if (pixels[i] > max) max = pixels[i];
+      }
+      const range = max - min || 1;
+
+      const dispCols = Math.min(cols, MAX_DISPLAY);
+      const dispRows = Math.min(rows, MAX_DISPLAY);
+      const stepX    = cols / dispCols;
+      const stepY    = rows / dispRows;
+      const cellSize = Math.max(4, Math.min(32, Math.floor(400 / dispCols), Math.floor(400 / dispRows)));
+
+      state = { pixels, cols, rows, cellSize, dispCols, dispRows, min, max };
+
+      matrixCanvas.width  = dispCols * cellSize;
+      matrixCanvas.height = dispRows * cellSize;
+
+      const showLabels = cellSize >= 26;
+      if (showLabels) {
+        ctx.font         = `${Math.floor(cellSize * 0.28)}px monospace`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+      }
+
+      for (let dy = 0; dy < dispRows; dy++) {
+        for (let dx = 0; dx < dispCols; dx++) {
+          const val  = pixels[Math.floor(dy * stepY) * cols + Math.floor(dx * stepX)];
+          const norm = (val - min) / range;
+          const v    = Math.round(norm * 255);
+
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          ctx.fillRect(dx * cellSize, dy * cellSize, cellSize, cellSize);
+
+          if (cellSize >= 6) {
+            ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+            ctx.lineWidth   = 0.5;
+            ctx.strokeRect(dx * cellSize + 0.5, dy * cellSize + 0.5, cellSize - 1, cellSize - 1);
+          }
+
+          if (showLabels) {
+            ctx.fillStyle = norm > 0.55 ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.8)';
+            ctx.fillText(val.toFixed(0), dx * cellSize + cellSize / 2, dy * cellSize + cellSize / 2);
+          }
+        }
+      }
+
+      const subsampled = cols > MAX_DISPLAY || rows > MAX_DISPLAY;
+      document.getElementById('matrix-info').textContent =
+        `${cols}×${rows} vox  [${min.toFixed(0)}, ${max.toFixed(0)}]` +
+        (subsampled ? `  (${dispCols}×${dispRows} shown)` : '');
+
+      document.getElementById('matrix-panel').style.display = 'flex';
+    }
+
+    // tooltip
+    matrixCanvas.addEventListener('mousemove', (e) => {
+      if (!state.pixels) return;
+      const rect = matrixCanvas.getBoundingClientRect();
+      const dx   = Math.floor((e.clientX - rect.left)  / (rect.width  / state.dispCols));
+      const dy   = Math.floor((e.clientY - rect.top)   / (rect.height / state.dispRows));
+      const sx   = Math.floor(dx * (state.cols / state.dispCols));
+      const sy   = Math.floor(dy * (state.rows / state.dispRows));
+      if (sx < state.cols && sy < state.rows) {
+        const val = state.pixels[sy * state.cols + sx];
+        tooltip.style.display = 'block';
+        tooltip.style.left    = (e.clientX + 12) + 'px';
+        tooltip.style.top     = (e.clientY - 24) + 'px';
+        tooltip.textContent   = `[${sx},${sy}] = ${val}`;
+      }
+    });
+    matrixCanvas.addEventListener('mouseleave', () => tooltip.style.display = 'none');
+
+    // Select
+    document.getElementById('select-btn').addEventListener('click', () => {
+      const btn       = document.getElementById('select-btn');
+      btn.disabled    = true;
+      btn.textContent = 'draw a box...';
+
+      Boostlet.select_box((topleft, bottomright) => {
+        btn.disabled    = false;
+        btn.textContent = 'select region';
+
+        const image = Boostlet.get_image(true);
+        const { data, width: volW, height: volH } = image;
+
+        if (!data || volW === null || volH === null) {
+          console.error('[boostlet] no slice data');
+          return;
+        }
+
+        const canvas = document.getElementById('viewer');
+        let x1 = Math.floor(Math.min(topleft.x, bottomright.x) * (volW / canvas.width));
+        let y1 = Math.floor(Math.min(topleft.y, bottomright.y) * (volH / canvas.height));
+        let x2 = Math.ceil( Math.max(topleft.x, bottomright.x) * (volW / canvas.width));
+        let y2 = Math.ceil( Math.max(topleft.y, bottomright.y) * (volH / canvas.height));
+
+        x1 = Math.max(0, Math.min(x1, volW - 1));
+        y1 = Math.max(0, Math.min(y1, volH - 1));
+        x2 = Math.max(x1 + 1, Math.min(x2, volW));
+        y2 = Math.max(y1 + 1, Math.min(y2, volH));
+
+        const cols = x2 - x1;
+        const rows = y2 - y1;
+        const sub  = new Float32Array(cols * rows);
+
+        for (let row = 0; row < rows; row++)
+          for (let col = 0; col < cols; col++)
+            sub[row * cols + col] = data[(y1 + row) * volW + (x1 + col)];
+
+        renderMatrix(sub, cols, rows);
+      });
+    });
+  </script>
+</body>
+</html>

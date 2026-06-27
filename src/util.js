@@ -12,11 +12,12 @@ export class Util {
 
     let framework = null;
 
-    if (Util.is_defined(window.nv)) {
+    // check window.nv is a NiiVue instance, not just the module
+    if (Util.is_defined(window.nv) && window.nv.volumes !== undefined) {
     
       framework = new NiiVue(window.nv);
     
-    } else if (Util.is_defined(window.niivue)) {
+    } else if (Util.is_defined(window.niivue) && window.niivue.volumes !== undefined) {
       
       framework = new NiiVue(window.niivue);
 
@@ -125,12 +126,6 @@ export class Util {
     }
 
     let base64 = offscreen.toDataURL('image/png');
-
-    // for debugging, download image
-    // const link = window.document.createElement("a");
-    // link.href = base64;
-    // link.download = 'test.png';
-    // link.click();
 
     base64 = base64.replace("data:image/png;base64,","");
 
