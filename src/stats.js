@@ -9,6 +9,7 @@ const NUMPY_TS_URL = 'https://esm.run/numpy-ts';
 
 let _np = null;
 
+// only load numpy-ts once, cache it in _np
 async function _load() {
   if (!_np) {
     _np = await import(NUMPY_TS_URL);
@@ -21,6 +22,7 @@ export async function loadStats() {
 
   return {
 
+    // convert typed array to a numpy-ts array so we can run ops on it
     _wrap(data) {
       return np.array(Array.from(data), 'float32');
     },
@@ -34,6 +36,7 @@ export async function loadStats() {
       return a.multiply(slope).add(inter);
     },
 
+    // numpy-ts returns array objects not plain numbers, unwrap to a scalar
     _scalar(val) {
       return typeof val === 'number' ? val : val.tolist ? val.tolist() : Number(val);
     },

@@ -2,12 +2,22 @@
 
 const CATEGORY = "Statistics";
 
+// inject boostlet, but wait for nv and volumes before calling init
+// calling init too early means niivue won't be detected yet
 const script = document.createElement("script");
 script.type = "text/javascript";
-script.src = "http://localhost:5501/dist/boostlet.min.js";
-script.onload = run;
+script.src = "https://boostlet.org/dist/boostlet.min.js";
+script.onload = function() {
+  var poll = setInterval(function() {
+    if (window.nv && nv.volumes && nv.volumes.length > 0) {
+      clearInterval(poll);
+      run();
+    }
+  }, 300);
+};
 document.head.appendChild(script);
 
+// half-width of the roi in voxels, so the full neighborhood is (2*HALF+1)^2
 const HALF = 4;
 
 async function run() {
@@ -19,25 +29,16 @@ async function run() {
   }
 
   const nv = Boostlet.framework.instance;
-
-  if (!nv.volumes || !nv.volumes.length) {
-    const wait = setInterval(function() {
-      if (nv.volumes && nv.volumes.length > 0) {
-        clearInterval(wait);
-        setup(nv);
-      }
-    }, 300);
-    return;
-  }
-
   setup(nv);
 }
 
 async function setup(nv) {
   plot();
 
+  // load numpy-ts via stats wrapper
   const stats = await Boostlet.stats();
 
+  // save whatever handler was already on nv so we can chain it
   const existingOnLocationChange = nv.onLocationChange;
 
   nv.onLocationChange = async function(loc) {
@@ -49,8 +50,10 @@ async function setup(nv) {
     const start = [v[0] - HALF, v[1] - HALF, v[2] - HALF];
     const end   = [v[0] + HALF, v[1] + HALF, v[2] + HALF];
 
-    const fixedAxis = nv.opts.sliceType === nv.sliceTypeSagittal ? 0
-                    : nv.opts.sliceType === nv.sliceTypeCoronal  ? 1 : 2;
+    // collapse the axis perpendicular to the current slice to a single voxel
+    // 2 = sagittal (x axis), 1 = coronal (y axis), default axial (z axis)
+    const fixedAxis = nv.opts.sliceType === 2 ? 0
+                    : nv.opts.sliceType === 1  ? 1 : 2;
     start[fixedAxis] = end[fixedAxis] = Math.round((start[fixedAxis] + end[fixedAxis]) / 2);
 
     const { data } = Boostlet.get_subvolume(start, end);
@@ -61,6 +64,7 @@ async function setup(nv) {
   };
 }
 
+// write computed stats into the panel dom elements
 function updatePanel(s) {
   document.getElementById('roi-mean').textContent = s.mean.toFixed(2);
   document.getElementById('roi-std').textContent  = s.std.toFixed(2);
@@ -70,6 +74,7 @@ function updatePanel(s) {
   document.getElementById('roi-p75').textContent  = s.p75.toFixed(2);
 }
 
+// create and inject the stats panel, remove any existing one first
 function plot() {
   const existing = document.getElementById('RoiStatsDiv');
   if (existing) existing.remove();
@@ -97,6 +102,7 @@ function plot() {
 
   document.body.appendChild(div);
 
+  // drag logic
   let startX, startY, startRight, startTop;
   div.addEventListener('mousedown', function(e) {
     startX     = e.clientX;

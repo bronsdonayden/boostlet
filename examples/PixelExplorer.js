@@ -8,7 +8,16 @@ window._PixelExplorerLoaded = true;
 const script = document.createElement("script");
 script.type = "text/javascript";
 script.src = "https://boostlet.org/dist/boostlet.min.js";
-script.onload = run;
+script.onload = function() {
+  // wait for nv and volumes before calling init
+  // calling init too early means niivue won't be detected yet
+  var poll = setInterval(function() {
+    if (window.nv && nv.volumes && nv.volumes.length > 0) {
+      clearInterval(poll);
+      run();
+    }
+  }, 300);
+};
 document.head.appendChild(script);
 
 const HALF = 4;
@@ -22,31 +31,18 @@ function run() {
   }
 
   const nv = Boostlet.framework.instance;
-
-  // if volume isn't loaded yet, retry until it is
-  if (!nv.volumes || !nv.volumes.length) {
-    const wait = setInterval(function() {
-      if (nv.volumes && nv.volumes.length > 0) {
-        clearInterval(wait);
-        setup(nv);
-      }
-    }, 300);
-    return;
-  }
-
   setup(nv);
 }
 
 function setup(nv) {
-  // Create the panel once
+  // create the panel once
   plot();
 
-  // Save the existing onLocationChange so we don't clobber it
+  // save the existing onLocationChange so we don't clobber it
   const existingOnLocationChange = nv.onLocationChange;
 
-  // Hook into location change — fires on every crosshair move / slice change
+  // hook into location change — fires on every crosshair move / slice change
   nv.onLocationChange = function(loc) {
-    // call the original if it existed
     if (existingOnLocationChange) existingOnLocationChange(loc);
 
     if (!nv.volumes || !nv.volumes.length) return;
@@ -56,10 +52,10 @@ function setup(nv) {
     const start = [v[0] - HALF, v[1] - HALF, v[2] - HALF];
     const end   = [v[0] + HALF, v[1] + HALF, v[2] + HALF];
 
-    // collapses the slice plane axis to a single voxel
-    // axial(0) Z=2, coronal(1) Y=1, sagittal(2) X=0
-    const fixedAxis = nv.opts.sliceType === nv.sliceTypeSagittal ? 0
-                    : nv.opts.sliceType === nv.sliceTypeCoronal  ? 1 : 2;
+    // collapse the axis perpendicular to the current slice to a single voxel
+    // 2 = sagittal (x axis), 1 = coronal (y axis), default axial (z axis)
+    const fixedAxis = nv.opts.sliceType === 2 ? 0
+                    : nv.opts.sliceType === 1  ? 1 : 2;
     start[fixedAxis] = end[fixedAxis] = Math.round((start[fixedAxis] + end[fixedAxis]) / 2);
 
     const { data, dims } = Boostlet.get_subvolume(start, end);
@@ -119,7 +115,7 @@ function drawMatrix(data, dims, mc) {
 }
 
 function plot() {
-  // Remove existing panel if re-run
+  // remove existing panel if re-run
   const existing = document.getElementById('PixelExplorerDiv');
   if (existing) existing.remove();
 
@@ -135,7 +131,7 @@ function plot() {
   mc.style.cssText = 'display:block; width:400px; height:400px;';
   container.appendChild(mc);
 
-  // Drag logic
+  // drag logic
   let startX, startY, startLeft, startTop;
   container.addEventListener('mousedown', function(e) {
     startX = e.clientX;
