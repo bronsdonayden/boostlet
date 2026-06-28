@@ -13,15 +13,12 @@
         
         <script type="text/javascript" src="js/annotator.js"></script>
 
-        <script src="/examples/PixelExplorer.js"></script>
+        <script src="/examples/roiStats.js"></script>
         
         <link rel="stylesheet" href="css/nouislider.min.css">
         <link rel="stylesheet" href="css/main.css">
 
-
         <title>CACTAS</title>
-
-
 
     </head>
 
@@ -47,12 +44,13 @@
         <script>
             window.addEventListener('load', function() {
                 var poll = setInterval(function() {
-                    // wait for volumes and for PixelExplorer to finish setup (panel + chained handler)
-                    // PixelExplorerDiv appearing means boostlet init + handler chain are done
-                    if (window.nv && nv.volumes && nv.volumes.length > 0 && document.getElementById('PixelExplorerDiv') && window.TESTCOMPLETED !== true) {
+                    // wait for volumes and for roistats to finish setup
+                    // RoiStatsDiv appearing means boostlet init + numpy-ts load + handler chain are all done
+                    if (window.nv && nv.volumes && nv.volumes.length > 0 && document.getElementById('RoiStatsDiv') && window.TESTCOMPLETED !== true) {
                         clearInterval(poll);
                         setTimeout(function() {
                             // fire a synthetic location change at volume center
+                            // in headless puppeteer there's no real crosshair movement so we do this manually
                             // drawer.js expects e.values[0].value so we include that to avoid errors in the chain
                             var v = nv.volumes[0];
                             var cx = Math.round(0.5 * v.dims[1]);
