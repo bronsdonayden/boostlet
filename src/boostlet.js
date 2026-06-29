@@ -145,15 +145,11 @@ export class Boostlet {
 
   }
 
-  /**
-   * 
-   * loads numpy-ts on first call.
-   * 
-   * Usage:
-   *   const stats = await Boostlet.stats();
-   *   const result = stats.all(subvolumeData);
-   *   // gives you  { mean, std, min, max, p25, p75 }
-   */
+   
+   
+   // const stats = await Boostlet.stats();
+   // const result = stats.all(subvolumeData);
+  // gives you  { mean, std, min, max, p25, p75 }
   async stats() {
 
     return loadStats();
