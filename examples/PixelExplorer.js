@@ -9,7 +9,7 @@ const script = document.createElement("script");
 script.type = "text/javascript";
 script.src = "https://boostlet.org/dist/boostlet.min.js";
 script.onload = function() {
-  // wait for nv and volumes before calling init
+  /// wait for nv and volumes before calling init
   // calling init too early means niivue won't be detected yet
   var poll = setInterval(function() {
     if (window.nv && nv.volumes && nv.volumes.length > 0) {
