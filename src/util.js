@@ -7,41 +7,82 @@ import { Papaya } from './frameworks/papaya.js';
 import { CanvasFallback } from './frameworks/canvasFallback.js';
 
 export class Util {
+
+  // check if an object resembles a niivue instance
+  // instanceof breaks since boostlet loads its own copy of the module
+  static looks_like_niivue(obj) {
+    if (!obj || typeof obj !== 'object') return false
+    if (!Array.isArray(obj.volumes)) return false
+    if (!obj.scene || typeof obj.scene !== 'object') return false
+    if (!obj.opts || obj.opts.sliceType === undefined) return false
+    if (typeof obj.updateGLVolume !== 'function') return false
+    return true
+  }
+
+  // scan all window properties for anything that looks like a niivue instance
+  // runs only if the known name checks above miss
+  static scan_window_for_niivue() {
+    const seen = new Set()
+    for (const key of Object.getOwnPropertyNames(window)) {
+      let val
+      try {
+        val = window[key]
+      } catch (e) {
+        // some globals throw SecurityError on access which is annoying
+        continue
+      }
+      if (!val || typeof val !== 'object') continue
+      if (seen.has(val)) continue
+      seen.add(val)
+      if (Util.looks_like_niivue(val)) return val
+    }
+    return null
+  }
   
   static detect_framework() {
 
     let framework = null;
 
-    if (Util.is_defined(window.nv)) {
-    
+    // fast path: check known names first
+    if (Util.looks_like_niivue(window.nv)) {
+
       framework = new NiiVue(window.nv);
-    
-    } else if (Util.is_defined(window.niivue)) {
-      
+
+    } else if (Util.looks_like_niivue(window.niivue)) {
+
       framework = new NiiVue(window.niivue);
 
-    } else if (Util.is_defined(window.cornerstone)) {
-
-      framework = new Cornerstone2D(window.cornerstone);
-
-    } else if (Util.is_defined(window.r)) {
-        
-      framework = new Xtk(window.r);
-      
-    } else if (Util.is_defined(window.OpenSeadragon)) {
-
-      framework = new OpenSeaDragon(window.OpenSeadragon);
-      
-    } else if (Util.is_defined(window.papayaContainers)) {
-      
-      framework = new Papaya(window.papayaContainers)
-
     } else {
-      // Canvas fallback
-      
-      console.log("No framework detected, falling back to canvas rendering");
-      framework = new CanvasFallback();
-      
+
+      // this is the slow path which scans window for any object that structurally matches niivue
+      const found = Util.scan_window_for_niivue()
+      if (found) {
+
+        framework = new NiiVue(found);
+
+      } else if (Util.is_defined(window.cornerstone)) {
+
+        framework = new Cornerstone2D(window.cornerstone);
+
+      } else if (Util.is_defined(window.r)) {
+
+        framework = new Xtk(window.r);
+
+      } else if (Util.is_defined(window.OpenSeadragon)) {
+
+        framework = new OpenSeaDragon(window.OpenSeadragon);
+
+      } else if (Util.is_defined(window.papayaContainers)) {
+
+        framework = new Papaya(window.papayaContainers)
+
+      } else {
+
+        console.log("No framework detected, falling back to canvas rendering");
+        framework = new CanvasFallback();
+
+      }
+
     }
 
     return framework;
@@ -125,12 +166,6 @@ export class Util {
     }
 
     let base64 = offscreen.toDataURL('image/png');
-
-    // for debugging, download image
-    // const link = window.document.createElement("a");
-    // link.href = base64;
-    // link.download = 'test.png';
-    // link.click();
 
     base64 = base64.replace("data:image/png;base64,","");
 

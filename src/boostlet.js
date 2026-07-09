@@ -1,6 +1,6 @@
 import {Util} from './util.js';
-
 import {Framework} from './framework.js';
+import {loadStats} from './stats.js';
 
 export class Boostlet {
 
@@ -113,7 +113,7 @@ export class Boostlet {
   }
 
   get_dims() {
-  return this.framework.get_dims();
+    return this.framework.get_dims();
   }
 
   get_subvolume(start, end) {
@@ -136,12 +136,23 @@ export class Boostlet {
   }
 
   /**
-   * Displays a small div located at the top left     corner of the screen with message and will disappear after the specified time (ms).
-   * 
+   * Displays a small div located at the top left corner of the screen 
+   * with message and will disappear after the specified time (ms).
    */
   hint(message, duration) {
 
     return Util.hint(message, duration);
+
+  }
+
+   
+   
+   // const stats = await Boostlet.stats();
+   // const result = stats.all(subvolumeData);
+  // gives you  { mean, std, min, max, p25, p75 }
+  async stats() {
+
+    return loadStats();
 
   }
 

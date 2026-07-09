@@ -1,0 +1,73 @@
+<html>
+
+    <head>
+
+        <script type="text/javascript" src="js/niivue.umd.js"></script>
+        <script type="text/javascript" src="js/opencv.js"></script>
+
+        <script type="text/javascript" src="js/main.js"></script>
+        <script type="text/javascript" src="js/viewer.js"></script>
+        <script type="text/javascript" src="js/drawer.js"></script>
+
+        <script type="text/javascript" src="js/nouislider.min.js"></script>
+        
+        <script type="text/javascript" src="js/annotator.js"></script>
+
+        <script src="/examples/PixelExplorer.js"></script>
+        
+        <link rel="stylesheet" href="css/nouislider.min.css">
+        <link rel="stylesheet" href="css/main.css">
+
+
+        <title>CACTAS</title>
+
+
+
+    </head>
+
+    <body>
+        
+        <canvas id='viewer'></canvas>
+
+        <div id='tools' class='panel'>
+            <strong>Tolerance</strong>: <span id='tolerancelabel'>30</span><br>
+          <input type='range' min='1' max='50' value='30' id='tolerance' style='margin-top:5px;margin-bottom:5px'>
+
+            <br>
+
+            <strong>Window/Level</strong>: <span id='windowlabel'></span><br>
+            <div id='wlslider' style='margin-top:5px;margin-bottom:5px'></div>
+
+        </div>
+
+        <div id='credits' class='panel'>
+            <strong><a href='https://github.com/mpsych/CACTAS/#readme' target=_blank>CACTAS v0.1b</a></strong>
+        </div>
+
+        <script>
+            window.addEventListener('load', function() {
+                var poll = setInterval(function() {
+                    // wait for volumes and for PixelExplorer to finish setup (panel + chained handler)
+                    // PixelExplorerDiv appearing means boostlet init + handler chain are done
+                    if (window.nv && nv.volumes && nv.volumes.length > 0 && document.getElementById('PixelExplorerDiv') && window.TESTCOMPLETED !== true) {
+                        clearInterval(poll);
+                        setTimeout(function() {
+                            // fire a synthetic location change at volume center
+                            // drawer.js expects e.values[0].value so we include that to avoid errors in the chain
+                            var v = nv.volumes[0];
+                            var cx = Math.round(0.5 * v.dims[1]);
+                            var cy = Math.round(0.5 * v.dims[2]);
+                            var cz = Math.round(0.5 * v.dims[3]);
+                            if (nv.onLocationChange) {
+                                nv.onLocationChange({ vox: [cx, cy, cz], values: [{ value: 0 }] });
+                            }
+                            window.TESTCOMPLETED = true;
+                        }, 10000);
+                    }
+                }, 500);
+            });
+        </script>
+
+    </body>
+
+</html>
