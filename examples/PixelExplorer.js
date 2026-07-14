@@ -69,7 +69,7 @@ function setup(nv) {
 
   nv.onLocationChange = triggerUpdate;
 
-  // synthesize a loc object from current crosshair state so the panel fills immediately
+  // make a loc object from current crosshair state so the panel fills immediately
   const pos = nv.scene.crosshairPos;
   const dims = nv.volumes[0].dims;
   const initialVox = [
