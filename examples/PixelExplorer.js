@@ -1,4 +1,4 @@
-CATEGORY = "Visualization"
+const CATEGORY = "Visualization"
 
 if (typeof window._PixelExplorerLoaded === 'undefined') {
 window._PixelExplorerLoaded = true;
@@ -12,9 +12,12 @@ script.onload = function() {
   /// wait for nv and volumes before calling init
   // calling init too early means niivue won't be detected yet
   var poll = setInterval(function() {
-    if (window.nv && nv.volumes && nv.volumes.length > 0) {
+    try {
+      Boostlet.init();
       clearInterval(poll);
       run();
+    } catch(e) {
+      // framework not ready yet keep polling
     }
   }, 300);
 };
@@ -23,8 +26,6 @@ document.head.appendChild(script);
 const HALF = 4;
 
 function run() {
-  Boostlet.init();
-
   if (Boostlet.framework.name !== 'niivue') {
     alert('Only niivue is supported right now :(');
     return;
@@ -42,7 +43,8 @@ function setup(nv) {
   const existingOnLocationChange = nv.onLocationChange;
 
   // hook into location change — fires on every crosshair move / slice change
-  nv.onLocationChange = function(loc) {
+  // fire once immediately so the panel is populated on load without requiring a click
+  const triggerUpdate = function(loc) {
     if (existingOnLocationChange) existingOnLocationChange(loc);
 
     if (!nv.volumes || !nv.volumes.length) return;
@@ -64,6 +66,18 @@ function setup(nv) {
       if (mc) drawMatrix(data, dims, mc);
     }
   };
+
+  nv.onLocationChange = triggerUpdate;
+
+  // make a loc object from current crosshair state so the panel fills immediately
+  const pos = nv.scene.crosshairPos;
+  const dims = nv.volumes[0].dims;
+  const initialVox = [
+    Math.round(pos[0] * dims[1]),
+    Math.round(pos[1] * dims[2]),
+    Math.round(pos[2] * dims[3])
+  ];
+  triggerUpdate({ vox: initialVox });
 }
 
 // render voxel values as a labeled grayscale grid
@@ -121,14 +135,16 @@ function plot() {
 
   let container = window.document.createElement('div');
   container.id = 'PixelExplorerDiv';
-  container.style.cssText = 'position:fixed; top:10px; left:10px; z-index:1000; cursor:move;';
+  container.style.cssText = 'position:fixed; top:10px; left:10px; z-index:2147483647; cursor:move; border:2px solid #fff; box-shadow:0 0 0 1px #000; border-radius:3px; overflow:hidden; line-height:0;';
   window.document.body.appendChild(container);
+
+  const size = Math.floor(400 / (HALF * 2 + 1)) * (HALF * 2 + 1);
 
   const mc = document.createElement('canvas');
   mc.id = 'PixelExplorerCanvas';
-  mc.width = 400;
-  mc.height = 400;
-  mc.style.cssText = 'display:block; width:400px; height:400px;';
+  mc.width = size;
+  mc.height = size;
+  mc.style.cssText = `display:block; width:${size}px; height:${size}px;`;
   container.appendChild(mc);
 
   // drag logic

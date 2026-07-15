@@ -1,33 +1,36 @@
-(function() {
-
 const CATEGORY = "Statistics";
 
-// inject boostlet, but wait for nv and volumes before calling init
-// calling init too early means niivue won't be detected yet
-const script = document.createElement("script");
-script.type = "text/javascript";
-script.src = "https://boostlet.org/dist/boostlet.min.js";
+if (typeof window._RoiStatsLoaded === 'undefined') {
+window._RoiStatsLoaded = true;
+
+(function() {
+
+const NUMPY_TS_URL = 'https://cdn.jsdelivr.net/npm/numpy-ts@1.3.0/dist/numpy-ts.browser.js';
+
+// half width of the roi in voxels so the full neighborhood is (2*HALF+1)^2
+const HALF = 4;
+
+const script = document.createElement('script');
+script.type = 'text/javascript';
+script.src = 'https://boostlet.org/dist/boostlet.min.js';
 script.onload = function() {
   var poll = setInterval(function() {
-    if (window.nv && nv.volumes && nv.volumes.length > 0) {
+    try {
+      Boostlet.init();
       clearInterval(poll);
       run();
+    } catch(e) {
+      // framework not ready yet keep polling
     }
   }, 300);
 };
 document.head.appendChild(script);
 
-// half-width of the roi in voxels, so the full neighborhood is (2*HALF+1)^2
-const HALF = 4;
-
-async function run() {
-  Boostlet.init();
-
+function run() {
   if (Boostlet.framework.name !== 'niivue') {
     alert('Only niivue is supported right now :(');
     return;
   }
-
   const nv = Boostlet.framework.instance;
   setup(nv);
 }
@@ -35,13 +38,12 @@ async function run() {
 async function setup(nv) {
   plot();
 
-  // load numpy-ts via stats wrapper
-  const stats = await Boostlet.stats();
+  // load numpy-ts directly no boostlet wrapper needed
+  const np = await import(NUMPY_TS_URL);
 
-  // save whatever handler was already on nv so we can chain it
   const existingOnLocationChange = nv.onLocationChange;
 
-  nv.onLocationChange = async function(loc) {
+  const triggerUpdate = async function(loc) {
     if (existingOnLocationChange) existingOnLocationChange(loc);
     if (!nv.volumes || !nv.volumes.length) return;
 
@@ -50,8 +52,6 @@ async function setup(nv) {
     const start = [v[0] - HALF, v[1] - HALF, v[2] - HALF];
     const end   = [v[0] + HALF, v[1] + HALF, v[2] + HALF];
 
-    // collapse the axis perpendicular to the current slice to a single voxel
-    // 2 = sagittal (x axis), 1 = coronal (y axis), default axial (z axis)
     const fixedAxis = nv.opts.sliceType === 2 ? 0
                     : nv.opts.sliceType === 1  ? 1 : 2;
     start[fixedAxis] = end[fixedAxis] = Math.round((start[fixedAxis] + end[fixedAxis]) / 2);
@@ -59,9 +59,20 @@ async function setup(nv) {
     const { data } = Boostlet.get_subvolume(start, end);
     if (!data || data.length === 0) return;
 
-    const result = stats.all(data, nv.volumes[0]);
+    const result = computeStats(np, data, nv.volumes[0]);
     updatePanel(result);
   };
+
+  nv.onLocationChange = triggerUpdate;
+
+  // fire immediately so panel populates on load
+  const pos = nv.scene.crosshairPos;
+  const dims = nv.volumes[0].dims;
+  triggerUpdate({ vox: [
+    Math.round(pos[0] * dims[1]),
+    Math.round(pos[1] * dims[2]),
+    Math.round(pos[2] * dims[3])
+  ]});
 }
 
 // write computed stats into the panel dom elements
@@ -74,7 +85,7 @@ function updatePanel(s) {
   document.getElementById('roi-p75').textContent  = s.p75.toFixed(2);
 }
 
-// create and inject the stats panel, remove any existing one first
+// create and inject the stats panel remove any existing one first
 function plot() {
   const existing = document.getElementById('RoiStatsDiv');
   if (existing) existing.remove();
@@ -82,7 +93,7 @@ function plot() {
   const div = document.createElement('div');
   div.id = 'RoiStatsDiv';
   div.style.cssText = `
-    position: fixed; top: 10px; right: 10px; z-index: 1000;
+    position: fixed; top: 10px; right: 10px; z-index: 2147483647;
     background: rgba(0,0,0,0.85); color: #fff;
     font-family: monospace; font-size: 13px;
     padding: 12px 16px; border-radius: 6px;
@@ -123,4 +134,22 @@ function plot() {
   });
 }
 
+// inline stat functions using numpy-ts directly
+// apply nifti slope/intercept then compute all stats in one pass
+function computeStats(np, data, volume) {
+  const slope = (volume && volume.hdr.scl_slope) || 1;
+  const inter = (volume && volume.hdr.scl_inter) || 0;
+  const a = np.array(Array.from(data), 'float32').multiply(slope).add(inter);
+  const scalar = v => typeof v === 'number' ? v : v.tolist ? v.tolist() : Number(v);
+  return {
+    mean : scalar(np.mean(a)),
+    std  : scalar(np.std(a)),
+    min  : scalar(np.min(a)),
+    max  : scalar(np.max(a)),
+    p25  : scalar(np.percentile(a, 25)),
+    p75  : scalar(np.percentile(a, 75)),
+  };
+}
+
 })();
+}

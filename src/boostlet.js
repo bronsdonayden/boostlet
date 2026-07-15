@@ -1,6 +1,4 @@
 import {Util} from './util.js';
-import {Framework} from './framework.js';
-import {loadStats} from './stats.js';
 
 export class Boostlet {
 
@@ -34,7 +32,7 @@ export class Boostlet {
 
     if (this.framework) {
 
-      console.log('Found', this.framework, '!')
+      console.log('Found', this.framework.name, '!')
     
     } else {
 
@@ -142,17 +140,6 @@ export class Boostlet {
   hint(message, duration) {
 
     return Util.hint(message, duration);
-
-  }
-
-   
-   
-   // const stats = await Boostlet.stats();
-   // const result = stats.all(subvolumeData);
-  // gives you  { mean, std, min, max, p25, p75 }
-  async stats() {
-
-    return loadStats();
 
   }
 
