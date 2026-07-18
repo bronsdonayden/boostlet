@@ -1,6 +1,6 @@
 const CATEGORY = "Utility";
 
-// re-injection guard so clicking the bookmarklet twice doesnt break anything
+//  guard so clicking the bookmarklet twice doesnt break anything
 if (typeof window._NumpyBoostletLoaded === 'undefined') {
 window._NumpyBoostletLoaded = true;
 
