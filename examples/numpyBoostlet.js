@@ -12,7 +12,7 @@ const ACE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js';
 // load boostlet first then poll until niivue is detected
 const boostletScript = document.createElement('script');
 boostletScript.type = 'text/javascript';
-boostletScript.src = 'http://localhost:5501/dist/boostlet.min.js';
+boostletScript.src = 'https://boostlet.org/dist/boostlet.min.js';
 boostletScript.onload = function() {
   var poll = setInterval(function() {
     try {
