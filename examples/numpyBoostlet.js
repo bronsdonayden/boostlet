@@ -1,6 +1,6 @@
 const CATEGORY = "Utility";
 
-//  guard so clicking the bookmarklet twice doesnt break anything
+// guard so clicking the bookmarklet twice doesnt break anything
 if (typeof window._NumpyBoostletLoaded === 'undefined') {
 window._NumpyBoostletLoaded = true;
 
@@ -30,27 +30,28 @@ async function setup() {
     return;
   }
 
-  // load numpyts and make it a global var
+  // shortcut so user code can write Boostlet.nv instead of Boostlet.framework.instance
+  Boostlet.nv = Boostlet.framework.instance;
+
+  // load numpyts and expose it globally
   window.np = await import(NUMPY_TS_URL);
 
-  // returns a flat float32 numpy array of  voxel values
-  // no slope or intercept applied
-  window.to_numpy = function() {
-    const img = Boostlet.framework.instance.volumes[0].img;
+  // wraps the full volume typed array into a numpyts ndarray
+  // no slope or intercept applied here
+  Boostlet.to_np = function() {
+    const img = Boostlet.nv.volumes[0].img;
     return np.array(Array.from(img), 'float32');
   };
 
-  // writes a typed array / numpyts array back into vol.img and renders
-  // if the array is like a numpyts object tjen pull the data via arr.data
-  window.update_from_numpy = function(arr) {
-    const nv = Boostlet.framework.instance;
-    const vol = nv.volumes[0];
+  // writes a numpyts ndarray or plain typed array back into vol.img and renders
+  Boostlet.from_np = function(arr) {
+    const vol = Boostlet.nv.volumes[0];
     const src = (arr && arr.data) ? arr.data : arr;
     vol.img.set(src);
-    nv.updateGLVolume();
+    Boostlet.nv.updateGLVolume();
   };
 
-  // load ace which is the text editor thing then build the editor panel
+  // load ace then build the editor panel
   const aceScript = document.createElement('script');
   aceScript.src = ACE_URL;
   aceScript.onload = function() { plot(); };
@@ -62,7 +63,7 @@ window._numpySnapshot = null;
 
 function runCode() {
   const outputDiv = document.getElementById('nb-output');
-  const vol = Boostlet.framework.instance.volumes[0];
+  const vol = Boostlet.nv.volumes[0];
 
   // save current state before running
   window._numpySnapshot = vol.img.slice();
@@ -84,9 +85,8 @@ function runCode() {
 
 function undoCode() {
   if (!window._numpySnapshot) return;
-  const nv = Boostlet.framework.instance;
-  nv.volumes[0].img.set(window._numpySnapshot);
-  nv.updateGLVolume();
+  Boostlet.nv.volumes[0].img.set(window._numpySnapshot);
+  Boostlet.nv.updateGLVolume();
   window._numpySnapshot = null;
   document.getElementById('nb-output').innerHTML = '<span style="color:#aaa">undo applied</span>';
 }
@@ -142,7 +142,7 @@ function plot() {
   div.id = 'nb-panel';
   div.innerHTML = `
     <div id="nb-titlebar">
-      <span>numpy boostlet &nbsp;<em>np &bull; to_numpy() &bull; update_from_numpy(arr)</em></span>
+      <span>numpy boostlet &nbsp;<em>Boostlet.nv &bull; Boostlet.to_np() &bull; Boostlet.from_np(arr) &bull; np</em></span>
       <span id="nb-close">&#x2715;</span>
     </div>
     <div id="nb-editor-div"></div>
@@ -161,23 +161,26 @@ function plot() {
   editor.setFontSize(13);
   editor.setOption('wrap', true);
   editor.setValue(
-`// vol.img is raw int16 so all thresholds must be in raw space
-// display = raw * slope + inter
-// raw = (display - inter) / slope
+`// Available API:
+//   Boostlet.nv          — the live NiiVue instance
+//   Boostlet.to_np()     — wraps vol.img into a numpyts ndarray
+//   Boostlet.from_np(arr)— writes an ndarray or typed array back and re-renders
+//   np                   — numpyts, loaded globally
 
-const vol = Boostlet.framework.instance.volumes[0];
-const slope = vol.hdr.scl_slope;
-const inter = vol.hdr.scl_inter;
+// --- Example 1: plain typed-array manipulation (no np needed) ---
+const vol = Boostlet.nv.volumes[0];
+const img = vol.img;
 
-const display_threshold = 500;
-const raw_threshold = (display_threshold - inter) / slope;
-const raw_zero = Math.round((0 - inter) / slope);
-
-const copy = vol.img.slice();
-for (let i = 0; i < copy.length; i++) {
-  if (copy[i] < raw_threshold) copy[i] = raw_zero;
+// clamp every voxel to half its current value
+for (let i = 0; i < img.length; i++) {
+  img[i] = img[i] * 0.5;
 }
-update_from_numpy(copy);`,
+Boostlet.nv.updateGLVolume();
+
+// --- Example 2: using numpyts ---
+// const arr = Boostlet.to_np();
+// const scaled = np.multiply(arr, np.array([2.0], 'float32'));
+// Boostlet.from_np(scaled);`,
     -1
   );
   window._numpyEditor = editor;
