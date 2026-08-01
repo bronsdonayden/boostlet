@@ -9,6 +9,28 @@ window._NumpyBoostletLoaded = true;
 const NUMPY_TS_URL = 'https://cdn.jsdelivr.net/npm/numpy-ts@1.3.0/dist/numpy-ts.browser.js';
 const ACE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js';
 
+// register with sync so peers know this boostlet is active
+// and so incoming messages get routed here
+;(window.__boostlet_active = window.__boostlet_active || []).push({
+  name: 'numpyBoostlet',
+  url: 'https://boostlet.org/examples/numpyBoostlet.js',
+  onMessage: function(msg) {
+    if (msg.type === 'numpy-edit') {
+      // peer is typing so update editor content without running
+      if (window._numpyEditor && msg.code !== window._numpyEditor.getValue()) {
+        window._numpyEditor.setValue(msg.code, -1)
+      }
+    }
+    if (msg.type === 'numpy-run') {
+      // peer ran code so set content and run locally so both volumes stay in sync
+      if (window._numpyEditor) {
+        window._numpyEditor.setValue(msg.code, -1)
+        runCode(false)
+      }
+    }
+  }
+})
+
 // load boostlet first then poll until niivue is detected
 const boostletScript = document.createElement('script');
 boostletScript.type = 'text/javascript';
@@ -61,7 +83,10 @@ async function setup() {
 // snapshot of vol.img saved before each run so undo can restore it
 window._numpySnapshot = null;
 
-function runCode() {
+// broadcast controls whether this run is sent to peers
+// set to false when we are applying a remote run to avoid echo
+function runCode(broadcastRun) {
+  if (broadcastRun === undefined) broadcastRun = true;
   const outputDiv = document.getElementById('nb-output');
   const vol = Boostlet.nv.volumes[0];
 
@@ -74,9 +99,13 @@ function runCode() {
   console.log = function(msg) { outputDiv.innerHTML += msg + '<br>'; };
 
   // wrap in async so user code can await if needed
+  const code = window._numpyEditor.getValue();
   const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-  new AsyncFunction(window._numpyEditor.getValue())().then(() => {
+  new AsyncFunction(code)().then(() => {
     console.log = origLog;
+    if (broadcastRun && typeof window.__sync_send === 'function') {
+      window.__sync_send({ type: 'numpy-run', code })
+    }
   }).catch(err => {
     outputDiv.innerHTML += '<span style="color:#f77">' + err.toString() + '</span>';
     console.log = origLog;
@@ -110,6 +139,10 @@ function injectStyles() {
     }
     #nb-titlebar span { color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
     #nb-titlebar span em { color: #555; font-style: normal; }
+    #nb-sync-indicator {
+      font-size: 10px; color: #555; letter-spacing: 0.05em;
+    }
+    #nb-sync-indicator.active { color: #4a4; }
     #nb-close { color: #666; cursor: pointer; font-size: 16px; }
     #nb-editor-div { width: 100%; flex: 1; min-height: 100px; overflow: hidden; }
     #nb-toolbar {
@@ -143,6 +176,7 @@ function plot() {
   div.innerHTML = `
     <div id="nb-titlebar">
       <span>numpy boostlet &nbsp;<em>Boostlet.nv &bull; Boostlet.to_np() &bull; Boostlet.from_np(arr) &bull; np</em></span>
+      <span id="nb-sync-indicator">sync off</span>
       <span id="nb-close">&#x2715;</span>
     </div>
     <div id="nb-editor-div"></div>
@@ -185,16 +219,37 @@ Boostlet.nv.updateGLVolume();
   );
   window._numpyEditor = editor;
 
+  // update sync indicator based on whether sync is active
+  const indicator = document.getElementById('nb-sync-indicator');
+  function refreshIndicator() {
+    const hasPeers = typeof window.__sync_send === 'function'
+    indicator.textContent = hasPeers ? 'sync on' : 'sync off'
+    indicator.className = hasPeers ? 'active' : ''
+  }
+  refreshIndicator()
+  setInterval(refreshIndicator, 2000)
+
+  // broadcast code edits to peers for live typing sync
+  let editBroadcastTimer = null
+  editor.session.on('change', () => {
+    if (typeof window.__sync_send !== 'function') return
+    clearTimeout(editBroadcastTimer)
+    // debounce slightly so we dont flood the channel on every keystroke
+    editBroadcastTimer = setTimeout(() => {
+      window.__sync_send({ type: 'numpy-edit', code: editor.getValue() })
+    }, 80)
+  })
+
   // keep ace redrawn when the panel is resized
   new ResizeObserver(() => editor.resize()).observe(document.getElementById('nb-editor-div'));
 
   editor.commands.addCommand({
     name: 'run',
     bindKey: { win: 'Ctrl-Enter', mac: 'Cmd-Enter' },
-    exec: runCode
+    exec: () => runCode(true)
   });
 
-  document.getElementById('nb-run-btn').addEventListener('click', runCode);
+  document.getElementById('nb-run-btn').addEventListener('click', () => runCode(true));
   document.getElementById('nb-undo-btn').addEventListener('click', undoCode);
   document.getElementById('nb-close').addEventListener('click', () => div.remove());
 
