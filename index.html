@@ -183,29 +183,20 @@
   </style>
   <script type="text/javascript">
 
-    // https://raw.githubusercontent.com/mpsych/boostlet/main/examples/sobel.js
-    //load_boostlet("https://raw.githubusercontent.com/mpsych/boostlet/main/examples/sobel.js", function(e) {compile_boostlet('sobel',e)})
-
-
     function load_boostlet(url, callback) {
 
         let xhr = new XMLHttpRequest();
         xhr.open("GET", url);
         xhr.onreadystatechange = function () {
           if (xhr.readyState === 4) {
-            // request done
             callback( xhr.response );
-
             return;
-
           }
         }
 
         xhr.send(null)
     }
 
-
-    // FROM https://caiorss.github.io/bookmarklet-maker/
     function compile_boostlet (code){
 
         var output = "javascript:" +  encodeURIComponent("(function(){" + code.trim() +  "})();");
@@ -229,7 +220,7 @@
 
     window.onload = function() {
 
-        var examples = ['sobel.js', 'segmentanything.js', 'imageCaptioning.js', 'meshAR.js', 'fibersAR.js', 'plotly.js', 'trako.js', 'melanoma.js', 'webllm.js', 'brainchop.js', 'CatVSDog.js', 'PixelExplorer.js', 'roiStats.js', 'numpyBoostlet.js', 'collaborativeSync.js'];
+        var examples = ['sobel.js', 'segmentanything.js', 'imageCaptioning.js', 'meshAR.js', 'fibersAR.js', 'plotly.js', 'trako.js', 'melanoma.js', 'webllm.js', 'brainchop.js', 'CatVSDog.js', 'PixelExplorer.js', 'roiStats.js', 'numpyBoostlet.js', 'sync.js'];
 
         var baseurl = 'https://raw.githubusercontent.com/bronsdonayden/boostlet/main/examples/';
 
@@ -328,7 +319,7 @@
 
                <div><a href='' id='numpyBoostlet.js'><button id='numpyBoostlet.js' class="button">NumPy Editor (NiiVue only!)</button></a><br><div style='margin:2px'><a href='' id='numpyBoostlet.js-code' target='_blank'><img src='gfx/badge.svg'></a></div></div>
 
-               <div><a href='' id='collaborativeSync.js'><button id='collaborativeSync.js' class="button">Collaborative Sync (NiiVue only!)</button></a><br><div style='margin:2px'><a href='' id='collaborativeSync.js-code' target='_blank'><img src='gfx/badge.svg'></a></div></div>
+               <div><a href='' id='sync.js'><button id='sync.js' class="button">Sync (NiiVue only!)</button></a><br><div style='margin:2px'><a href='' id='sync.js-code' target='_blank'><img src='gfx/badge.svg'></a></div></div>
 
         </div>
 
