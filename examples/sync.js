@@ -49,14 +49,30 @@
   }
 
   // scene capture and apply
+  // avoids nv.document.json() entirely since on older niivue versions it embeds
+  // the full volume buffer even with embedImages=false making the payload huge
 
   async function captureScene(nv) {
-    const doc = nv.document ? nv.document.json(false, false) : {}
     const base = nv.volumes && nv.volumes[0]
     const volumeUrl = base && base.url && !base.url.startsWith('blob:') ? base.url : null
     const volumeData = !volumeUrl && base && base.img ? arrayBufferToBase64(base.img.buffer) : null
     const activeBoostlets = (window.__boostlet_active || []).map(({ name, url }) => ({ name, url }))
-    return { originUrl: location.href, volumeUrl, volumeData, nvDoc: doc, activeBoostlets }
+    const nvDoc = {
+      scene: {
+        crosshairPos: nv.scene ? Array.from(nv.scene.crosshairPos) : [0.5, 0.5, 0.5]
+      },
+      opts: {
+        sliceType: nv.opts ? nv.opts.sliceType : 0
+      },
+      volumes: base ? [{
+        url: volumeUrl,
+        colormap: base.colormap,
+        opacity: base.opacity,
+        cal_min: base.cal_min,
+        cal_max: base.cal_max
+      }] : []
+    }
+    return { originUrl: location.href, volumeUrl, volumeData, nvDoc, activeBoostlets }
   }
 
   async function applyScene(nv, scene) {
@@ -70,12 +86,18 @@
       } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
     }
     if (!scene.nvDoc) return
-    try {
-      await nv.loadDocument(await nv.document.constructor.loadFromJSON(scene.nvDoc))
-    } catch (e) {
-      const { scene: s, opts: o } = scene.nvDoc
-      if (s && s.crosshairPos) { nv.scene.crosshairPos = new Float32Array(s.crosshairPos); nv.drawScene && nv.drawScene() }
-      if (o && o.sliceType !== undefined) nv.setSliceType && nv.setSliceType(o.sliceType)
+    const { scene: s, opts: o, volumes: vols } = scene.nvDoc
+    if (s && s.crosshairPos) {
+      nv.scene.crosshairPos = new Float32Array(s.crosshairPos)
+      nv.drawScene && nv.drawScene()
+    }
+    if (o && o.sliceType !== undefined) nv.setSliceType && nv.setSliceType(o.sliceType)
+    if (vols && vols[0] && nv.volumes && nv.volumes[0]) {
+      const vol = nv.volumes[0]
+      if (vols[0].colormap) nv.setColormap && nv.setColormap(vol.id, vols[0].colormap)
+      if (vols[0].cal_min !== undefined) vol.cal_min = vols[0].cal_min
+      if (vols[0].cal_max !== undefined) vol.cal_max = vols[0].cal_max
+      nv.updateGLVolume && nv.updateGLVolume()
     }
   }
 
