@@ -40,6 +40,10 @@ let remoteEdit = false
       setTimeout(() => { remoteEdit = false }, 0)
       runCode(false)
     }
+    if (msg.type === 'numpy-undo') {
+      // peer undid so restore our own snapshot to match
+      undoCode(false)
+    }
   }
 })
 
@@ -124,12 +128,16 @@ function runCode(broadcastRun) {
   });
 }
 
-function undoCode() {
+function undoCode(broadcastUndo) {
+  if (broadcastUndo === undefined) broadcastUndo = true;
   if (!window._numpySnapshot) return;
   Boostlet.nv.volumes[0].img.set(window._numpySnapshot);
   Boostlet.nv.updateGLVolume();
   window._numpySnapshot = null;
   document.getElementById('nb-output').innerHTML = '<span style="color:#aaa">undo applied</span>';
+  if (broadcastUndo && typeof window.__sync_send === 'function') {
+    window.__sync_send({ type: 'numpy-undo' })
+  }
 }
 
 function injectStyles() {
