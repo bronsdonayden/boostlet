@@ -27,7 +27,7 @@ let remoteEdit = false
         remoteEdit = true
         window._numpyEditor.setValue(msg.code, -1)
         window._numpyEditor.moveCursorToPosition(cursor)
-        remoteEdit = false
+        setTimeout(() => { remoteEdit = false }, 0)
       }
     }
     if (msg.type === 'numpy-run') {
@@ -37,7 +37,7 @@ let remoteEdit = false
       remoteEdit = true
       window._numpyEditor.setValue(msg.code, -1)
       window._numpyEditor.moveCursorToPosition(cursor)
-      remoteEdit = false
+      setTimeout(() => { remoteEdit = false }, 0)
       runCode(false)
     }
   }
