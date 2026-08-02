@@ -202,20 +202,25 @@
 
   // rAF loop that diffs individual fields and broadcasts only what changed
   // each field is its own message type so the receiver applies just that field
+  // throttled to 33ms minimum between crosshair broadcasts to avoid flooding
 
   function startBroadcasting(nv) {
     let last = { crosshairPos: null, sliceType: null, colormap: null, cal_min: null, cal_max: null }
+    let lastCrosshairBroadcast = 0
 
     const tick = () => {
       if (!applyingRemote) {
         const cur = snapState(nv)
+        const now = Date.now()
 
-        // crosshair is checked per component since it changes most frequently
+        // throttle crosshair to 30fps max to avoid flooding the channel
         if (cur.crosshairPos && (!last.crosshairPos ||
           cur.crosshairPos[0] !== last.crosshairPos[0] ||
           cur.crosshairPos[1] !== last.crosshairPos[1] ||
-          cur.crosshairPos[2] !== last.crosshairPos[2])) {
+          cur.crosshairPos[2] !== last.crosshairPos[2]) &&
+          now - lastCrosshairBroadcast >= 33) {
           last.crosshairPos = cur.crosshairPos
+          lastCrosshairBroadcast = now
           broadcast({ type: 'crosshair', crosshairPos: cur.crosshairPos })
         }
 
@@ -308,7 +313,7 @@
           cal_min: msg.cal_min,
           cal_max: msg.cal_max
         })
-        applyingRemote = false
+        setTimeout(() => { applyingRemote = false }, 0)
         return
       }
 
