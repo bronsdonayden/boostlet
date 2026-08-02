@@ -183,40 +183,15 @@
   </style>
   <script type="text/javascript">
 
-    function load_boostlet(url, callback) {
-
-        let xhr = new XMLHttpRequest();
-        xhr.open("GET", url);
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState === 4) {
-            callback( xhr.response );
-            return;
-          }
-        }
-
-        xhr.send(null)
-    }
-
-    function compile_boostlet (code){
-
-        var output = "javascript:" +  encodeURIComponent("(function(){" + code.trim() +  "})();");
-
-        return output;
-
-    }
-
     function setup_boostlet_button(id, url) {
 
         var link = document.getElementById(id);
 
-        load_boostlet(url, function(code) {
+        // fetch fresh on every click so updates are picked up without re-dragging
+        var fetcher = '(function(){fetch("' + url + '?_="+Date.now()).then(function(r){return r.text()}).then(function(c){eval(c)})})();';
+        link.href = 'javascript:' + encodeURIComponent(fetcher);
 
-            output = compile_boostlet(code);
-            link.href = output;
-
-        });
-
-    } 
+    }
 
     window.onload = function() {
 
