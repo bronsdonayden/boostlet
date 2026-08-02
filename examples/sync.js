@@ -48,7 +48,7 @@
     return myHash
   }
 
-  // scene capture and apply
+  // scene capture
   // avoids nv.document.json() entirely since on older niivue versions it embeds
   // the full volume buffer even with embedImages=false making the payload huge
 
@@ -71,47 +71,55 @@
     }
   }
 
-  async function applyScene(nv, scene, loadVolume) {
-    // only load the volume on initial join not on live updates
-    if (loadVolume) {
-      if (scene.volumeUrl && (!nv.volumes || !nv.volumes.length)) {
-        try { await nv.loadVolumes([{ url: scene.volumeUrl }]) }
-        catch (e) { Boostlet.hint('could not load volume from url', 4000) }
-      } else if (scene.volumeData && (!nv.volumes || !nv.volumes.length)) {
-        try {
-          const blob = new Blob([base64ToArrayBuffer(scene.volumeData)])
-          await nv.loadVolumes([{ url: URL.createObjectURL(blob), name: 'shared.nii' }])
-        } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
-      }
+  // snapshot of just the live display fields for diffing in the broadcast loop
+  function snapState(nv) {
+    const b = nv.volumes && nv.volumes[0]
+    return {
+      crosshairPos: nv.scene ? Array.from(nv.scene.crosshairPos) : [0.5, 0.5, 0.5],
+      sliceType: nv.opts ? nv.opts.sliceType : 0,
+      colormap: b ? b.colormap : null,
+      cal_min: b ? b.cal_min : null,
+      cal_max: b ? b.cal_max : null
     }
+  }
 
-    let applyingRemote = true
-    try {
-      if (scene.crosshairPos) {
-        nv.scene.crosshairPos = new Float32Array(scene.crosshairPos)
-        if (typeof nv.createOnLocationChange === 'function') nv.createOnLocationChange()
-        nv.drawScene && nv.drawScene()
-      }
-      if (scene.sliceType !== undefined && nv.opts.sliceType !== scene.sliceType) {
-        nv.setSliceType && nv.setSliceType(scene.sliceType)
-      }
-      if (nv.volumes && nv.volumes[0]) {
-        const vol = nv.volumes[0]
-        if (scene.colormap) nv.setColormap && nv.setColormap(vol.id, scene.colormap)
-        if (scene.cal_min !== null && scene.cal_min !== undefined) vol.cal_min = scene.cal_min
-        if (scene.cal_max !== null && scene.cal_max !== undefined) vol.cal_max = scene.cal_max
-        nv.updateGLVolume && nv.updateGLVolume()
-      }
-    } finally {
-      applyingRemote = false
+  async function applyScene(nv, scene) {
+    if (scene.volumeUrl && (!nv.volumes || !nv.volumes.length)) {
+      try { await nv.loadVolumes([{ url: scene.volumeUrl }]) }
+      catch (e) { Boostlet.hint('could not load volume from url', 4000) }
+    } else if (scene.volumeData && (!nv.volumes || !nv.volumes.length)) {
+      try {
+        const blob = new Blob([base64ToArrayBuffer(scene.volumeData)])
+        await nv.loadVolumes([{ url: URL.createObjectURL(blob), name: 'shared.nii' }])
+      } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
     }
-    return applyingRemote
+    // wait until volumes are actually loaded before applying display state
+    if (nv.volumes && nv.volumes.length) applyDiff(nv, scene)
+  }
+
+  // apply only the display fields from a diff or full scene object
+  function applyDiff(nv, diff) {
+    if (diff.crosshairPos) {
+      nv.scene.crosshairPos = new Float32Array(diff.crosshairPos)
+      nv.drawScene && nv.drawScene()
+    }
+    if (diff.sliceType !== undefined && nv.opts.sliceType !== diff.sliceType) {
+      nv.setSliceType && nv.setSliceType(diff.sliceType)
+    }
+    if (nv.volumes && nv.volumes[0]) {
+      const vol = nv.volumes[0]
+      let needsUpdate = false
+      if (diff.colormap && diff.colormap !== vol.colormap) { nv.setColormap && nv.setColormap(vol.id, diff.colormap); needsUpdate = true }
+      if (diff.cal_min !== null && diff.cal_min !== undefined) { vol.cal_min = diff.cal_min; needsUpdate = true }
+      if (diff.cal_max !== null && diff.cal_max !== undefined) { vol.cal_max = diff.cal_max; needsUpdate = true }
+      if (needsUpdate) nv.updateGLVolume && nv.updateGLVolume()
+    }
   }
 
   // host path
-  // captures scene once on inject and stores it so the share link reconstructs
-  // the exact moment the user clicked share
-  // after that all live sync goes through webrtc not the http store
+  // captures scene once and stores it so the share link reconstructs the exact
+  // moment the user clicked share then periodically patches it every 3s
+  // all live sync goes through webrtc diff messages not the http store
 
   async function hostScene(nv) {
     const scene = captureScene(nv)
@@ -126,13 +134,20 @@
     history.replaceState(null, '', `${location.pathname}?${next}${location.hash}`)
 
     updatePanel(code)
-    // connect to webrtc room and start broadcasting live updates once peers connect
-    connectToRoom(nv, code, true)
+    connectToRoom(nv, code)
+
+    // periodically patch the server snapshot so late joiners get a recent scene
+    // skips volumeData to avoid sending the full volume buffer every 3s
+    setInterval(() => {
+      const s = captureScene(nv)
+      delete s.volumeData
+      fetch(`${SCENE_API}/${code}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) }).catch(() => {})
+    }, 3000)
   }
 
   // joiner path
-  // fetches the scene snapshot from the moment the host clicked share
-  // applies it once then switches entirely to webrtc for live updates
+  // fetches the stored scene snapshot and applies it once including volume load
+  // then switches entirely to webrtc diff messages for live updates
 
   async function joinScene(nv, code) {
     let scene
@@ -152,13 +167,10 @@
       return
     }
 
-    // apply the stored snapshot including volume load
-    await applyScene(nv, scene, true)
+    await applyScene(nv, scene)
     updatePanel(code)
     if (scene.activeBoostlets && scene.activeBoostlets.length) promptBoostlets(scene.activeBoostlets)
-
-    // from here on all sync is webrtc only
-    connectToRoom(nv, code, false)
+    connectToRoom(nv, code)
   }
 
   // webrtc mesh
@@ -167,7 +179,7 @@
   let selfId = null, roomPeers = [], signal = null, nvRef = null
   let applyingRemote = false
 
-  function connectToRoom(nv, code, isHost) {
+  function connectToRoom(nv, code) {
     nvRef = nv
     signal = new WebSocket(`${SIGNAL_URL}?room=${encodeURIComponent(code)}`)
     signal.onerror = () => Boostlet.hint('could not reach signal server', 4000)
@@ -184,21 +196,43 @@
       } catch (e) {}
     }
 
-    // host starts the rAF loop that diffs scene state and broadcasts changes
-    if (isHost) startBroadcasting(nv)
+    // both host and joiner broadcast diffs so sync works in both directions
+    startBroadcasting(nv)
   }
 
-  // rAF loop that diffs scene state and broadcasts changes to all verified peers
-  // runs only on the host side — joiners receive and apply
+  // rAF loop that diffs individual fields and broadcasts only what changed
+  // each field is its own message type so the receiver applies just that field
 
   function startBroadcasting(nv) {
-    let lastSnap = ''
+    let last = { crosshairPos: null, sliceType: null, colormap: null, cal_min: null, cal_max: null }
+
     const tick = () => {
       if (!applyingRemote) {
-        const snap = JSON.stringify(captureScene(nv))
-        if (snap !== lastSnap) {
-          lastSnap = snap
-          broadcast({ type: 'scene-update', scene: JSON.parse(snap) })
+        const cur = snapState(nv)
+
+        // crosshair is checked per component since it changes most frequently
+        if (cur.crosshairPos && (!last.crosshairPos ||
+          cur.crosshairPos[0] !== last.crosshairPos[0] ||
+          cur.crosshairPos[1] !== last.crosshairPos[1] ||
+          cur.crosshairPos[2] !== last.crosshairPos[2])) {
+          last.crosshairPos = cur.crosshairPos
+          broadcast({ type: 'crosshair', crosshairPos: cur.crosshairPos })
+        }
+
+        if (cur.sliceType !== last.sliceType) {
+          last.sliceType = cur.sliceType
+          broadcast({ type: 'sliceType', sliceType: cur.sliceType })
+        }
+
+        if (cur.colormap !== last.colormap) {
+          last.colormap = cur.colormap
+          broadcast({ type: 'colormap', colormap: cur.colormap })
+        }
+
+        if (cur.cal_min !== last.cal_min || cur.cal_max !== last.cal_max) {
+          last.cal_min = cur.cal_min
+          last.cal_max = cur.cal_max
+          broadcast({ type: 'calRange', cal_min: cur.cal_min, cal_max: cur.cal_max })
         }
       }
       requestAnimationFrame(tick)
@@ -263,12 +297,21 @@
       let msg; try { msg = JSON.parse(e.data) } catch { return }
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
       if (!peer.verified) return
-      if (msg.type === 'scene-update') {
-        // apply live scene update from host without reloading the volume
+
+      // handle targeted diff messages directly
+      if (msg.type === 'crosshair' || msg.type === 'sliceType' || msg.type === 'colormap' || msg.type === 'calRange') {
         applyingRemote = true
-        applyScene(nvRef, msg.scene, false).finally(() => { applyingRemote = false })
+        applyDiff(nvRef, {
+          crosshairPos: msg.crosshairPos,
+          sliceType: msg.sliceType,
+          colormap: msg.colormap,
+          cal_min: msg.cal_min,
+          cal_max: msg.cal_max
+        })
+        applyingRemote = false
         return
       }
+
       routeMessage(msg)
     }
     channel.onclose = () => { if (peer.channel === channel) { peer.channel = null; peer.verified = false } }

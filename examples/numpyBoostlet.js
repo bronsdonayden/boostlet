@@ -17,16 +17,20 @@ const ACE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js';
   onMessage: function(msg) {
     if (msg.type === 'numpy-edit') {
       // peer is typing so update editor content without running
+      // save and restore cursor so local typing is not interrupted
       if (window._numpyEditor && msg.code !== window._numpyEditor.getValue()) {
+        const cursor = window._numpyEditor.getCursorPosition()
         window._numpyEditor.setValue(msg.code, -1)
+        window._numpyEditor.moveCursorToPosition(cursor)
       }
     }
     if (msg.type === 'numpy-run') {
       // peer ran code so set content and run locally so both volumes stay in sync
-      if (window._numpyEditor) {
-        window._numpyEditor.setValue(msg.code, -1)
-        runCode(false)
-      }
+      if (!window._numpyEditor) return
+      const cursor = window._numpyEditor.getCursorPosition()
+      window._numpyEditor.setValue(msg.code, -1)
+      window._numpyEditor.moveCursorToPosition(cursor)
+      runCode(false)
     }
   }
 })
