@@ -52,59 +52,69 @@
   // avoids nv.document.json() entirely since on older niivue versions it embeds
   // the full volume buffer even with embedImages=false making the payload huge
 
-  async function captureScene(nv) {
+  function captureScene(nv) {
     const base = nv.volumes && nv.volumes[0]
     const volumeUrl = base && base.url && !base.url.startsWith('blob:') ? base.url : null
     const volumeData = !volumeUrl && base && base.img ? arrayBufferToBase64(base.img.buffer) : null
     const activeBoostlets = (window.__boostlet_active || []).map(({ name, url }) => ({ name, url }))
-    const nvDoc = {
-      scene: {
-        crosshairPos: nv.scene ? Array.from(nv.scene.crosshairPos) : [0.5, 0.5, 0.5]
-      },
-      opts: {
-        sliceType: nv.opts ? nv.opts.sliceType : 0
-      },
-      volumes: base ? [{
-        url: volumeUrl,
-        colormap: base.colormap,
-        opacity: base.opacity,
-        cal_min: base.cal_min,
-        cal_max: base.cal_max
-      }] : []
+    return {
+      originUrl: location.href,
+      volumeUrl,
+      volumeData,
+      activeBoostlets,
+      crosshairPos: nv.scene ? Array.from(nv.scene.crosshairPos) : [0.5, 0.5, 0.5],
+      sliceType: nv.opts ? nv.opts.sliceType : 0,
+      colormap: base ? base.colormap : null,
+      opacity: base ? base.opacity : 1,
+      cal_min: base ? base.cal_min : null,
+      cal_max: base ? base.cal_max : null
     }
-    return { originUrl: location.href, volumeUrl, volumeData, nvDoc, activeBoostlets }
   }
 
-  async function applyScene(nv, scene) {
-    if (scene.volumeUrl && (!nv.volumes || !nv.volumes.length)) {
-      try { await nv.loadVolumes([{ url: scene.volumeUrl }]) }
-      catch (e) { Boostlet.hint('could not load volume from url', 4000) }
-    } else if (scene.volumeData && (!nv.volumes || !nv.volumes.length)) {
-      try {
-        const blob = new Blob([base64ToArrayBuffer(scene.volumeData)])
-        await nv.loadVolumes([{ url: URL.createObjectURL(blob), name: 'shared.nii' }])
-      } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
+  async function applyScene(nv, scene, loadVolume) {
+    // only load the volume on initial join not on live updates
+    if (loadVolume) {
+      if (scene.volumeUrl && (!nv.volumes || !nv.volumes.length)) {
+        try { await nv.loadVolumes([{ url: scene.volumeUrl }]) }
+        catch (e) { Boostlet.hint('could not load volume from url', 4000) }
+      } else if (scene.volumeData && (!nv.volumes || !nv.volumes.length)) {
+        try {
+          const blob = new Blob([base64ToArrayBuffer(scene.volumeData)])
+          await nv.loadVolumes([{ url: URL.createObjectURL(blob), name: 'shared.nii' }])
+        } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
+      }
     }
-    if (!scene.nvDoc) return
-    const { scene: s, opts: o, volumes: vols } = scene.nvDoc
-    if (s && s.crosshairPos) {
-      nv.scene.crosshairPos = new Float32Array(s.crosshairPos)
-      nv.drawScene && nv.drawScene()
+
+    let applyingRemote = true
+    try {
+      if (scene.crosshairPos) {
+        nv.scene.crosshairPos = new Float32Array(scene.crosshairPos)
+        if (typeof nv.createOnLocationChange === 'function') nv.createOnLocationChange()
+        nv.drawScene && nv.drawScene()
+      }
+      if (scene.sliceType !== undefined && nv.opts.sliceType !== scene.sliceType) {
+        nv.setSliceType && nv.setSliceType(scene.sliceType)
+      }
+      if (nv.volumes && nv.volumes[0]) {
+        const vol = nv.volumes[0]
+        if (scene.colormap) nv.setColormap && nv.setColormap(vol.id, scene.colormap)
+        if (scene.cal_min !== null && scene.cal_min !== undefined) vol.cal_min = scene.cal_min
+        if (scene.cal_max !== null && scene.cal_max !== undefined) vol.cal_max = scene.cal_max
+        nv.updateGLVolume && nv.updateGLVolume()
+      }
+    } finally {
+      applyingRemote = false
     }
-    if (o && o.sliceType !== undefined) nv.setSliceType && nv.setSliceType(o.sliceType)
-    if (vols && vols[0] && nv.volumes && nv.volumes[0]) {
-      const vol = nv.volumes[0]
-      if (vols[0].colormap) nv.setColormap && nv.setColormap(vol.id, vols[0].colormap)
-      if (vols[0].cal_min !== undefined) vol.cal_min = vols[0].cal_min
-      if (vols[0].cal_max !== undefined) vol.cal_max = vols[0].cal_max
-      nv.updateGLVolume && nv.updateGLVolume()
-    }
+    return applyingRemote
   }
 
   // host path
+  // captures scene once on inject and stores it so the share link reconstructs
+  // the exact moment the user clicked share
+  // after that all live sync goes through webrtc not the http store
 
   async function hostScene(nv) {
-    const scene = await captureScene(nv)
+    const scene = captureScene(nv)
     let code
     try {
       const data = await fetch(SCENE_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scene) }).then(r => r.json())
@@ -116,11 +126,13 @@
     history.replaceState(null, '', `${location.pathname}?${next}${location.hash}`)
 
     updatePanel(code)
-    startPushing(nv, code)
-    connectToRoom(nv, code)
+    // connect to webrtc room and start broadcasting live updates once peers connect
+    connectToRoom(nv, code, true)
   }
 
   // joiner path
+  // fetches the scene snapshot from the moment the host clicked share
+  // applies it once then switches entirely to webrtc for live updates
 
   async function joinScene(nv, code) {
     let scene
@@ -140,53 +152,22 @@
       return
     }
 
-    await applyScene(nv, scene)
+    // apply the stored snapshot including volume load
+    await applyScene(nv, scene, true)
     updatePanel(code)
     if (scene.activeBoostlets && scene.activeBoostlets.length) promptBoostlets(scene.activeBoostlets)
-    startPolling(nv, code)
-    connectToRoom(nv, code)
-  }
 
-  // polling and pushing
-
-  function startPolling(nv, code) {
-    let applying = false
-    setInterval(async () => {
-      if (applying) return
-      try {
-        const res = await fetch(`${SCENE_API}/${code}`)
-        if (!res.ok) return
-        applying = true
-        await applyScene(nv, await res.json())
-      } catch (e) {} finally { applying = false }
-    }, 3000)
-  }
-
-  function startPushing(nv, code) {
-    let last = '', pushing = false
-    const snap = () => {
-      const b = nv.volumes && nv.volumes[0]
-      return JSON.stringify({ crosshairPos: nv.scene && Array.from(nv.scene.crosshairPos), sliceType: nv.opts && nv.opts.sliceType, calMin: b && b.cal_min, calMax: b && b.cal_max, colormap: b && b.colormap })
-    }
-    const tick = () => {
-      if (!pushing) {
-        const s = snap()
-        if (s !== last) {
-          last = s; pushing = true
-          captureScene(nv).then(scene => fetch(`${SCENE_API}/${code}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(scene) })).catch(() => {}).finally(() => { pushing = false })
-        }
-      }
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
+    // from here on all sync is webrtc only
+    connectToRoom(nv, code, false)
   }
 
   // webrtc mesh
 
   const peers = new Map()
   let selfId = null, roomPeers = [], signal = null, nvRef = null
+  let applyingRemote = false
 
-  function connectToRoom(nv, code) {
+  function connectToRoom(nv, code, isHost) {
     nvRef = nv
     signal = new WebSocket(`${SIGNAL_URL}?room=${encodeURIComponent(code)}`)
     signal.onerror = () => Boostlet.hint('could not reach signal server', 4000)
@@ -202,6 +183,27 @@
         if (msg.type === 'ice') await handleIce(msg.from, msg.payload)
       } catch (e) {}
     }
+
+    // host starts the rAF loop that diffs scene state and broadcasts changes
+    if (isHost) startBroadcasting(nv)
+  }
+
+  // rAF loop that diffs scene state and broadcasts changes to all verified peers
+  // runs only on the host side — joiners receive and apply
+
+  function startBroadcasting(nv) {
+    let lastSnap = ''
+    const tick = () => {
+      if (!applyingRemote) {
+        const snap = JSON.stringify(captureScene(nv))
+        if (snap !== lastSnap) {
+          lastSnap = snap
+          broadcast({ type: 'scene-update', scene: JSON.parse(snap) })
+        }
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
   }
 
   async function makeOffer(peerId) {
@@ -260,7 +262,14 @@
     channel.onmessage = (e) => {
       let msg; try { msg = JSON.parse(e.data) } catch { return }
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
-      if (peer.verified) routeMessage(msg)
+      if (!peer.verified) return
+      if (msg.type === 'scene-update') {
+        // apply live scene update from host without reloading the volume
+        applyingRemote = true
+        applyScene(nvRef, msg.scene, false).finally(() => { applyingRemote = false })
+        return
+      }
+      routeMessage(msg)
     }
     channel.onclose = () => { if (peer.channel === channel) { peer.channel = null; peer.verified = false } }
   }
