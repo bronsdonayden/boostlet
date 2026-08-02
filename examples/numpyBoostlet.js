@@ -9,6 +9,10 @@ window._NumpyBoostletLoaded = true;
 const NUMPY_TS_URL = 'https://cdn.jsdelivr.net/npm/numpy-ts@1.3.0/dist/numpy-ts.browser.js';
 const ACE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js';
 
+// flag to suppress broadcasting when a change came from a remote peer
+// prevents the echo loop where remote edits bounce back and forth
+let remoteEdit = false
+
 // register with sync so peers know this boostlet is active
 // and so incoming messages get routed here
 ;(window.__boostlet_active = window.__boostlet_active || []).push({
@@ -20,16 +24,20 @@ const ACE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js';
       // save and restore cursor so local typing is not interrupted
       if (window._numpyEditor && msg.code !== window._numpyEditor.getValue()) {
         const cursor = window._numpyEditor.getCursorPosition()
+        remoteEdit = true
         window._numpyEditor.setValue(msg.code, -1)
         window._numpyEditor.moveCursorToPosition(cursor)
+        remoteEdit = false
       }
     }
     if (msg.type === 'numpy-run') {
       // peer ran code so set content and run locally so both volumes stay in sync
       if (!window._numpyEditor) return
       const cursor = window._numpyEditor.getCursorPosition()
+      remoteEdit = true
       window._numpyEditor.setValue(msg.code, -1)
       window._numpyEditor.moveCursorToPosition(cursor)
+      remoteEdit = false
       runCode(false)
     }
   }
@@ -234,8 +242,10 @@ Boostlet.nv.updateGLVolume();
   setInterval(refreshIndicator, 2000)
 
   // broadcast code edits to peers for live typing sync
+  // skips broadcast if the change came from a remote peer to prevent echo loop
   let editBroadcastTimer = null
   editor.session.on('change', () => {
+    if (remoteEdit) return
     if (typeof window.__sync_send !== 'function') return
     clearTimeout(editBroadcastTimer)
     // debounce slightly so we dont flood the channel on every keystroke
