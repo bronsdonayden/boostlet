@@ -121,6 +121,8 @@ function runCode(broadcastRun) {
     console.log = origLog;
     if (broadcastRun && typeof window.__sync_send === 'function') {
       window.__sync_send({ type: 'numpy-run', code })
+      // send the modified volume to all peers after the op
+      if (typeof window.__sync_send_volume === 'function') window.__sync_send_volume()
     }
   }).catch(err => {
     outputDiv.innerHTML += '<span style="color:#f77">' + err.toString() + '</span>';

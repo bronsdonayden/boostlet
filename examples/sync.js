@@ -6,7 +6,13 @@
   const SCENE_API = 'https://aydenbronsdon.com/scene'
   const SIGNAL_URL = 'wss://aydenbronsdon.com/signal'
 
+  const CHUNK_SIZE = 65536
+  const BUFFER_THRESHOLD = 1048576 // pause sending when buffered amount exceeds 1MB
+
   window.__sync_send = function (msg) { broadcast(msg) }
+
+  // exposed so boostlets can trigger a volume transfer to all peers after ops
+  window.__sync_send_volume = function () { sendVolumeToAll() }
 
   if (window.Boostlet) {
     waitForNv()
@@ -71,7 +77,6 @@
     }
   }
 
-  // snapshot of just the live display fields for diffing in the broadcast loop
   function snapState(nv) {
     const b = nv.volumes && nv.volumes[0]
     return {
@@ -93,11 +98,9 @@
         await nv.loadVolumes([{ url: URL.createObjectURL(blob), name: 'shared.nii' }])
       } catch (e) { Boostlet.hint('could not load embedded volume', 4000) }
     }
-    // wait until volumes are actually loaded before applying display state
     if (nv.volumes && nv.volumes.length) applyDiff(nv, scene)
   }
 
-  // apply only the display fields from a diff or full scene object
   function applyDiff(nv, diff) {
     if (diff.crosshairPos) {
       nv.scene.crosshairPos = new Float32Array(diff.crosshairPos)
@@ -117,9 +120,6 @@
   }
 
   // host path
-  // captures scene once and stores it so the share link reconstructs the exact
-  // moment the user clicked share then periodically patches it every 3s
-  // all live sync goes through webrtc diff messages not the http store
 
   async function hostScene(nv) {
     const scene = captureScene(nv)
@@ -146,8 +146,6 @@
   }
 
   // joiner path
-  // fetches the stored scene snapshot and applies it once including volume load
-  // then switches entirely to webrtc diff messages for live updates
 
   async function joinScene(nv, code) {
     let scene
@@ -171,6 +169,109 @@
     updatePanel(code)
     if (scene.activeBoostlets && scene.activeBoostlets.length) promptBoostlets(scene.activeBoostlets)
     connectToRoom(nv, code)
+  }
+
+  // chunked volume transfer
+  // chunks are sent as binary ArrayBuffers with a 12 byte header:
+  // bytes 0-3: transfer id (uint32)
+  // bytes 4-7: chunk index (uint32)
+  // bytes 8-11: total chunks (uint32)
+  // bytes 12+: chunk data
+
+  const incomingTransfers = new Map()
+
+  function sendVolumeToAll() {
+    peers.forEach((peer, peerId) => {
+      if (peer.verified && peer.channel && peer.channel.readyState === 'open') {
+        sendVolumeToPeer(peer)
+      }
+    })
+  }
+
+  async function sendVolumeToPeer(peer) {
+    const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
+    if (!vol || !vol.img) return
+
+    const data = vol.img
+    const totalChunks = Math.ceil(data.byteLength / CHUNK_SIZE)
+    const transferId = Math.floor(Math.random() * 0xFFFFFFFF)
+
+    Boostlet.hint(`sending volume to peer  ${totalChunks} chunks`, 2000)
+
+    for (let i = 0; i < totalChunks; i++) {
+      // pause and wait for buffer to drain if it gets too full
+      while (peer.channel.bufferedAmount > BUFFER_THRESHOLD) {
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+
+      if (peer.channel.readyState !== 'open') break
+
+      const chunkStart = i * CHUNK_SIZE
+      const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, data.byteLength)
+      const chunkData = data.slice(chunkStart, chunkEnd)
+
+      // pack header + chunk into a single arraybuffer
+      const packet = new ArrayBuffer(12 + chunkData.byteLength)
+      const header = new DataView(packet)
+      header.setUint32(0, transferId)
+      header.setUint32(4, i)
+      header.setUint32(8, totalChunks)
+      new Uint8Array(packet, 12).set(new Uint8Array(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength))
+
+      try { peer.channel.send(packet) } catch (e) { break }
+
+      // show progress every 10%
+      if (i % Math.max(1, Math.floor(totalChunks / 10)) === 0) {
+        Boostlet.hint(`sending volume  ${Math.round(i / totalChunks * 100)}%`, 500)
+      }
+    }
+  }
+
+  function receiveChunk(buffer) {
+    if (buffer.byteLength < 12) return
+
+    const header = new DataView(buffer)
+    const transferId = header.getUint32(0)
+    const chunkIndex = header.getUint32(4)
+    const totalChunks = header.getUint32(8)
+    const chunkData = buffer.slice(12)
+
+    if (!incomingTransfers.has(transferId)) {
+      incomingTransfers.set(transferId, { chunks: new Array(totalChunks), received: 0, total: totalChunks })
+    }
+
+    const transfer = incomingTransfers.get(transferId)
+    transfer.chunks[chunkIndex] = chunkData
+    transfer.received++
+
+    // show progress every 10%
+    if (transfer.received % Math.max(1, Math.floor(totalChunks / 10)) === 0) {
+      Boostlet.hint(`receiving volume  ${Math.round(transfer.received / totalChunks * 100)}%`, 500)
+    }
+
+    if (transfer.received === transfer.total) {
+      incomingTransfers.delete(transferId)
+      assembleVolume(transfer.chunks)
+    }
+  }
+
+  function assembleVolume(chunks) {
+    const totalBytes = chunks.reduce((sum, c) => sum + c.byteLength, 0)
+    const assembled = new Uint8Array(totalBytes)
+    let offset = 0
+    for (const chunk of chunks) {
+      assembled.set(new Uint8Array(chunk), offset)
+      offset += chunk.byteLength
+    }
+
+    const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
+    if (!vol || !vol.img) return
+
+    vol.img.set(assembled)
+    nvRef.updateGLVolume && nvRef.updateGLVolume()
+    // invalidate hash since volume data changed
+    myHash = null
+    Boostlet.hint('volume received', 2000)
   }
 
   // webrtc mesh
@@ -293,17 +394,25 @@
   function wireChannel(peerId, channel) {
     const peer = peers.get(peerId); if (!peer) { channel.close(); return }
     peer.channel = channel
+    channel.binaryType = 'arraybuffer'
+
     channel.onopen = async () => {
       const hash = await hashVolume(nvRef)
       if (hash) { try { channel.send(JSON.stringify({ type: 'hash-check', hash })) } catch (e) {} }
       else { peer.verified = true; Boostlet.hint('peer connected', 2000) }
     }
+
     channel.onmessage = (e) => {
+      // binary messages are volume chunks, string messages are json
+      if (e.data instanceof ArrayBuffer) {
+        if (peer.verified) receiveChunk(e.data)
+        return
+      }
+
       let msg; try { msg = JSON.parse(e.data) } catch { return }
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
       if (!peer.verified) return
 
-      // handle targeted diff messages directly
       if (msg.type === 'crosshair' || msg.type === 'sliceType' || msg.type === 'colormap' || msg.type === 'calRange') {
         applyingRemote = true
         applyDiff(nvRef, {
@@ -319,6 +428,7 @@
 
       routeMessage(msg)
     }
+
     channel.onclose = () => { if (peer.channel === channel) { peer.channel = null; peer.verified = false } }
   }
 
