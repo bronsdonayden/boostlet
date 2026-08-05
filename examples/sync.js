@@ -223,7 +223,9 @@
   }
 
   function sendVolumeToAll() {
+    console.log('sendVolumeToAll called, peers:', peers.size)
     peers.forEach((peer, peerId) => {
+      console.log(peerId, 'verified:', peer.verified, 'channel:', peer.channel?.readyState)
       if (peer.verified && peer.channel && peer.channel.readyState === 'open') {
         sendVolumeToPeer(peer)
       }
