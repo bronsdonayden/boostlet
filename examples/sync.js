@@ -1,5 +1,5 @@
 ;(function () {
-  if (window.__boostlet_sync_injected) return
+  if (window.__boostlet_sync_injected && window.__boostlet_sync_signal && window.__boostlet_sync_signal.readyState === WebSocket.OPEN) return
   window.__boostlet_sync_injected = true
 
   const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
@@ -354,7 +354,7 @@
 
   function connectToRoom(nv, code) {
     nvRef = nv
-    signal = new WebSocket(`${SIGNAL_URL}?room=${encodeURIComponent(code)}`)
+    signal = window.__boostlet_sync_signal = new WebSocket(`${SIGNAL_URL}?room=${encodeURIComponent(code)}`)
     signal.onerror = () => Boostlet.hint('could not reach signal server', 4000)
     signal.onmessage = async (raw) => {
       let msg; try { msg = JSON.parse(raw.data) } catch { return }
