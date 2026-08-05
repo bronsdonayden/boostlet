@@ -486,6 +486,7 @@
 
       let msg; try { msg = JSON.parse(e.data) } catch { return }
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
+      if (msg.type === 'hash-accept') { peer.verified = true; Boostlet.hint('peer connected', 2000); return }
       if (msg.type === 'volume-meta') { pendingVolumeMeta = msg; return }
       if (!peer.verified) return
 
@@ -513,12 +514,15 @@
     const localHash = await hashVolume(nvRef)
     if (!localHash) {
       // no volume loaded yet so skip hash comparison but still allow connection
-      // volume transfer bypasses verification anyway so this is safe
+      // send hash-accept so the other peer also gets verified
       peer.verified = true
+      try { peer.channel.send(JSON.stringify({ type: 'hash-accept' })) } catch (e) {}
       Boostlet.hint('peer connected', 2000)
       return
     }
     peer.verified = localHash === remoteHash
+    // send our hash back so the other peer can verify us too
+    try { peer.channel.send(JSON.stringify({ type: 'hash-check', hash: localHash })) } catch (e) {}
     Boostlet.hint(peer.verified ? 'peer connected  volumes match' : 'peer volume mismatch  boostlet sync disabled', peer.verified ? 2000 : 5000)
   }
 
