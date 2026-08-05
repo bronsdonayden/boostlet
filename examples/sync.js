@@ -198,7 +198,8 @@
     let data
     let fullNifti = false
     try {
-      const bytes = await nvRef.saveImage({ filename: 'volume.nii', volumeByIndex: 0 })
+      // saveToDisk with empty filename returns nifti bytes without triggering a download
+      const bytes = await nvRef.saveToDisk(vol, '')
       if (bytes && bytes.byteLength > 352) {
         data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
         fullNifti = true
