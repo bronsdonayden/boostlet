@@ -435,18 +435,17 @@
     }
 
     channel.onmessage = (e) => {
-      // binary messages are volume chunks, string messages are json
+      // binary messages are volume chunks and bypass hash verification
+      // so a peer with no volume loaded can still receive one
       if (e.data instanceof ArrayBuffer) {
-        if (peer.verified) receiveChunk(e.data)
+        receiveChunk(e.data)
         return
       }
 
       let msg; try { msg = JSON.parse(e.data) } catch { return }
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
-      if (!peer.verified) return
-
-      // store incoming volume metadata for use when chunks finish assembling
       if (msg.type === 'volume-meta') { pendingVolumeMeta = msg; return }
+      if (!peer.verified) return
 
       if (msg.type === 'crosshair' || msg.type === 'sliceType' || msg.type === 'colormap' || msg.type === 'calRange') {
         applyingRemote = true
