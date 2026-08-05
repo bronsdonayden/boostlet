@@ -504,10 +504,20 @@
     const row = el('div', 'display:flex;gap:6px')
     row.append(input, joinBtn)
 
+    const sendVolBtn = el('button', `${BTN_CSS};background:#3a1a6a;color:#fff;margin-top:2px`, 'send volume to peers')
+    sendVolBtn.onclick = () => {
+      if (typeof window.__sync_send_volume !== 'function') { Boostlet.hint('no peers connected', 2000); return }
+      sendVolBtn.disabled = true
+      sendVolBtn.textContent = 'sending...'
+      window.__sync_send_volume()
+      setTimeout(() => { sendVolBtn.disabled = false; sendVolBtn.textContent = 'send volume to peers' }, 3000)
+    }
+
     panel.append(
       close,
       el('div', 'font-size:11px;color:#888;letter-spacing:.05em', 'boostlet sync'),
       status,
+      sendVolBtn,
       el('div', 'border-top:1px solid #333;margin:2px 0'),
       el('div', 'font-size:11px;color:#888', 'join with code'),
       row
@@ -526,8 +536,18 @@
       setTimeout(() => { copyBtn.textContent = 'copy link' }, 1500)
     })
 
-    const row = el('div', 'display:flex;align-items:center;gap:8px')
-    row.append(el('span', 'color:#4a4;letter-spacing:.1em;font-size:13px', code), copyBtn)
+    const sendVolBtn = el('button', `${BTN_CSS};background:#3a1a6a;color:#fff;margin-top:2px`, 'send volume to peers')
+    sendVolBtn.onclick = () => {
+      sendVolBtn.disabled = true
+      sendVolBtn.textContent = 'sending...'
+      window.__sync_send_volume()
+      setTimeout(() => { sendVolBtn.disabled = false; sendVolBtn.textContent = 'send volume to peers' }, 3000)
+    }
+
+    const row = el('div', 'display:flex;flex-direction:column;gap:6px')
+    const codeRow = el('div', 'display:flex;align-items:center;gap:8px')
+    codeRow.append(el('span', 'color:#4a4;letter-spacing:.1em;font-size:13px', code), copyBtn)
+    row.append(codeRow, sendVolBtn)
     status.replaceWith(row)
   }
 
