@@ -179,6 +179,60 @@
   // bytes 12+: chunk data
 
   const incomingTransfers = new Map()
+  let pendingVolumeMeta = null
+
+  function buildNifti1(meta, voxelData) {
+    // nifti1 header is 348 bytes + 4 byte extension block = 352 bytes before voxel data
+    const hdrBuf = new ArrayBuffer(352)
+    const d = new DataView(hdrBuf)
+    const bytes = new Uint8Array(hdrBuf)
+
+    // sizeof_hdr
+    d.setInt32(0, 348, true)
+
+    // dims: dims[0] = number of dimensions, then x y z etc
+    const dims = meta.dims
+    for (let i = 0; i < 8; i++) d.setInt16(40 + i * 2, dims[i] || 0, true)
+
+    // datatype and bitpix
+    const datatype = meta.datatype || 16 // 16 = float32
+    d.setInt16(70, datatype, true)
+    const bitsPerVoxel = datatype === 16 ? 32 : datatype === 4 ? 16 : datatype === 8 ? 32 : 8
+    d.setInt16(72, bitsPerVoxel, true)
+
+    // pixdims
+    const pixDims = meta.pixDims
+    for (let i = 0; i < 8; i++) d.setFloat32(76 + i * 4, pixDims[i] || 1, true)
+
+    // vox_offset: where voxel data starts
+    d.setFloat32(108, 352, true)
+
+    // scl_slope and scl_inter
+    d.setFloat32(112, meta.scl_slope || 1, true)
+    d.setFloat32(116, meta.scl_inter || 0, true)
+
+    // qform and sform codes
+    d.setInt16(252, meta.qform_code || 1, true)
+    d.setInt16(254, meta.sform_code || 1, true)
+
+    // srow affine (3 rows of 4 floats at offset 280)
+    if (meta.affine) {
+      const aff = meta.affine
+      for (let i = 0; i < 12; i++) d.setFloat32(280 + i * 4, aff[i] || 0, true)
+    }
+
+    // magic: ni1\0 for single file nifti
+    bytes[344] = 110; bytes[345] = 105; bytes[346] = 49; bytes[347] = 0
+
+    // extension block: 4 zero bytes
+    // already zero from ArrayBuffer
+
+    // combine header and voxel data
+    const nifti = new Uint8Array(352 + voxelData.byteLength)
+    nifti.set(new Uint8Array(hdrBuf), 0)
+    nifti.set(new Uint8Array(voxelData.buffer, voxelData.byteOffset, voxelData.byteLength), 352)
+    return nifti
+  }
 
   function sendVolumeToAll() {
     peers.forEach((peer, peerId) => {
@@ -191,6 +245,22 @@
   async function sendVolumeToPeer(peer) {
     const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
     if (!vol || !vol.img) return
+
+    // send header metadata first so receiver can reconstruct a valid nifti file
+    const hdr = vol.hdr
+    try {
+      peer.channel.send(JSON.stringify({
+        type: 'volume-meta',
+        dims: Array.from(hdr.dims),
+        pixDims: Array.from(hdr.pixDims),
+        datatype: hdr.datatypeCode,
+        scl_slope: hdr.scl_slope,
+        scl_inter: hdr.scl_inter,
+        sform_code: hdr.sform_code,
+        qform_code: hdr.qform_code,
+        affine: hdr.affine ? Array.from(hdr.affine.flat ? hdr.affine.flat() : hdr.affine) : null
+      }))
+    } catch (e) { return }
 
     const data = vol.img
     const totalChunks = Math.ceil(data.byteLength / CHUNK_SIZE)
@@ -270,17 +340,22 @@
       // volume already loaded and same size so write directly into it
       vol.img.set(assembled)
       nvRef.updateGLVolume && nvRef.updateGLVolume()
-    } else {
-      // no volume loaded or size mismatch so load from blob
-      const blob = new Blob([assembled])
+      myHash = null
+      Boostlet.hint('volume received', 2000)
+    } else if (pendingVolumeMeta) {
+      // no volume loaded so build a valid nifti file from the received header metadata
+      const nifti = buildNifti1(pendingVolumeMeta, assembled)
+      pendingVolumeMeta = null
+      const blob = new Blob([nifti], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       nvRef.loadVolumes([{ url, name: 'received.nii' }]).then(() => {
         URL.revokeObjectURL(url)
+        myHash = null
+        Boostlet.hint('volume received', 2000)
       }).catch(() => { Boostlet.hint('could not load received volume', 4000) })
+    } else {
+      Boostlet.hint('no volume metadata received', 4000)
     }
-
-    myHash = null
-    Boostlet.hint('volume received', 2000)
   }
 
   // webrtc mesh
@@ -422,6 +497,9 @@
       if (msg.type === 'hash-check') { handleHashCheck(peerId, msg.hash); return }
       if (!peer.verified) return
 
+      // store incoming volume metadata for use when chunks finish assembling
+      if (msg.type === 'volume-meta') { pendingVolumeMeta = msg; return }
+
       if (msg.type === 'crosshair' || msg.type === 'sliceType' || msg.type === 'colormap' || msg.type === 'calRange') {
         applyingRemote = true
         applyDiff(nvRef, {
@@ -513,20 +591,10 @@
     const row = el('div', 'display:flex;gap:6px')
     row.append(input, joinBtn)
 
-    const sendVolBtn = el('button', `${BTN_CSS};background:#3a1a6a;color:#fff;margin-top:2px`, 'send volume to peers')
-    sendVolBtn.onclick = () => {
-      if (typeof window.__sync_send_volume !== 'function') { Boostlet.hint('no peers connected', 2000); return }
-      sendVolBtn.disabled = true
-      sendVolBtn.textContent = 'sending...'
-      window.__sync_send_volume()
-      setTimeout(() => { sendVolBtn.disabled = false; sendVolBtn.textContent = 'send volume to peers' }, 3000)
-    }
-
     panel.append(
       close,
       el('div', 'font-size:11px;color:#888;letter-spacing:.05em', 'boostlet sync'),
       status,
-      sendVolBtn,
       el('div', 'border-top:1px solid #333;margin:2px 0'),
       el('div', 'font-size:11px;color:#888', 'join with code'),
       row
@@ -545,7 +613,7 @@
       setTimeout(() => { copyBtn.textContent = 'copy link' }, 1500)
     })
 
-    const sendVolBtn = el('button', `${BTN_CSS};background:#3a1a6a;color:#fff;margin-top:2px`, 'send volume to peers')
+    const sendVolBtn = el('button', `${BTN_CSS};background:#222;color:#aaa;border:1px solid #555;margin-top:2px`, 'send volume to peers')
     sendVolBtn.onclick = () => {
       sendVolBtn.disabled = true
       sendVolBtn.textContent = 'sending...'
