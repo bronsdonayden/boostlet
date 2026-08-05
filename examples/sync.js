@@ -212,9 +212,9 @@
       }
     }
 
-    // magic ni1 for single file nifti
+    // magic n+1\0 for single file nifti1
     const bytes = new Uint8Array(hdrBuf)
-    bytes[344] = 110; bytes[345] = 105; bytes[346] = 49; bytes[347] = 0
+    bytes[344] = 110; bytes[345] = 43; bytes[346] = 49; bytes[347] = 0
 
     const nifti = new Uint8Array(352 + voxelData.byteLength)
     nifti.set(bytes, 0)
