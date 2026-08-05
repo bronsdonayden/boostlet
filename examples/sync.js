@@ -265,11 +265,20 @@
     }
 
     const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
-    if (!vol || !vol.img) return
 
-    vol.img.set(assembled)
-    nvRef.updateGLVolume && nvRef.updateGLVolume()
-    // invalidate hash since volume data changed
+    if (vol && vol.img && vol.img.byteLength === assembled.byteLength) {
+      // volume already loaded and same size so write directly into it
+      vol.img.set(assembled)
+      nvRef.updateGLVolume && nvRef.updateGLVolume()
+    } else {
+      // no volume loaded or size mismatch so load from blob
+      const blob = new Blob([assembled])
+      const url = URL.createObjectURL(blob)
+      nvRef.loadVolumes([{ url, name: 'received.nii' }]).then(() => {
+        URL.revokeObjectURL(url)
+      }).catch(() => { Boostlet.hint('could not load received volume', 4000) })
+    }
+
     myHash = null
     Boostlet.hint('volume received', 2000)
   }
