@@ -181,59 +181,6 @@
   const incomingTransfers = new Map()
   let pendingVolumeMeta = null
 
-  function buildNifti1(meta, voxelData) {
-    // nifti1 header is 348 bytes + 4 byte extension block = 352 bytes before voxel data
-    const hdrBuf = new ArrayBuffer(352)
-    const d = new DataView(hdrBuf)
-    const bytes = new Uint8Array(hdrBuf)
-
-    // sizeof_hdr
-    d.setInt32(0, 348, true)
-
-    // dims: dims[0] = number of dimensions, then x y z etc
-    const dims = meta.dims
-    for (let i = 0; i < 8; i++) d.setInt16(40 + i * 2, dims[i] || 0, true)
-
-    // datatype and bitpix
-    const datatype = meta.datatype || 16 // 16 = float32
-    d.setInt16(70, datatype, true)
-    const bitsPerVoxel = datatype === 16 ? 32 : datatype === 4 ? 16 : datatype === 8 ? 32 : 8
-    d.setInt16(72, bitsPerVoxel, true)
-
-    // pixdims
-    const pixDims = meta.pixDims
-    for (let i = 0; i < 8; i++) d.setFloat32(76 + i * 4, pixDims[i] || 1, true)
-
-    // vox_offset: where voxel data starts
-    d.setFloat32(108, 352, true)
-
-    // scl_slope and scl_inter
-    d.setFloat32(112, meta.scl_slope || 1, true)
-    d.setFloat32(116, meta.scl_inter || 0, true)
-
-    // qform and sform codes
-    d.setInt16(252, meta.qform_code || 1, true)
-    d.setInt16(254, meta.sform_code || 1, true)
-
-    // srow affine (3 rows of 4 floats at offset 280)
-    if (meta.affine) {
-      const aff = meta.affine
-      for (let i = 0; i < 12; i++) d.setFloat32(280 + i * 4, aff[i] || 0, true)
-    }
-
-    // magic: ni1\0 for single file nifti
-    bytes[344] = 110; bytes[345] = 105; bytes[346] = 49; bytes[347] = 0
-
-    // extension block: 4 zero bytes
-    // already zero from ArrayBuffer
-
-    // combine header and voxel data
-    const nifti = new Uint8Array(352 + voxelData.byteLength)
-    nifti.set(new Uint8Array(hdrBuf), 0)
-    nifti.set(new Uint8Array(voxelData.buffer, voxelData.byteOffset, voxelData.byteLength), 352)
-    return nifti
-  }
-
   function sendVolumeToAll() {
     peers.forEach((peer, peerId) => {
       if (peer.verified && peer.channel && peer.channel.readyState === 'open') {
@@ -246,51 +193,51 @@
     const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
     if (!vol || !vol.img) return
 
-    // send header metadata first so receiver can reconstruct a valid nifti file
-    const hdr = vol.hdr
+    // try to get a valid nifti file using niivue's save method
+    // saveImage returns a uint8array of the full nifti file including header
+    let data
+    let fullNifti = false
     try {
-      peer.channel.send(JSON.stringify({
-        type: 'volume-meta',
-        dims: Array.from(hdr.dims),
-        pixDims: Array.from(hdr.pixDims),
-        datatype: hdr.datatypeCode,
-        scl_slope: hdr.scl_slope,
-        scl_inter: hdr.scl_inter,
-        sform_code: hdr.sform_code,
-        qform_code: hdr.qform_code,
-        affine: hdr.affine ? Array.from(hdr.affine.flat ? hdr.affine.flat() : hdr.affine) : null
-      }))
-    } catch (e) { return }
+      const bytes = await nvRef.saveImage({ filename: 'volume.nii', volumeByIndex: 0 })
+      if (bytes && bytes.byteLength > 352) {
+        data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+        fullNifti = true
+      }
+    } catch (e) {}
 
-    const data = vol.img
+    if (!data) {
+      // fallback to raw voxel data if saveImage is not available
+      data = new Uint8Array(vol.img.buffer, vol.img.byteOffset, vol.img.byteLength)
+    }
+
     const totalChunks = Math.ceil(data.byteLength / CHUNK_SIZE)
     const transferId = Math.floor(Math.random() * 0xFFFFFFFF)
+
+    try {
+      peer.channel.send(JSON.stringify({ type: 'volume-meta', fullNifti }))
+    } catch (e) { return }
 
     Boostlet.hint(`sending volume to peer  ${totalChunks} chunks`, 2000)
 
     for (let i = 0; i < totalChunks; i++) {
-      // pause and wait for buffer to drain if it gets too full
       while (peer.channel.bufferedAmount > BUFFER_THRESHOLD) {
         await new Promise(resolve => setTimeout(resolve, 50))
       }
-
       if (peer.channel.readyState !== 'open') break
 
       const chunkStart = i * CHUNK_SIZE
       const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, data.byteLength)
       const chunkData = data.slice(chunkStart, chunkEnd)
 
-      // pack header + chunk into a single arraybuffer
       const packet = new ArrayBuffer(12 + chunkData.byteLength)
       const header = new DataView(packet)
       header.setUint32(0, transferId)
       header.setUint32(4, i)
       header.setUint32(8, totalChunks)
-      new Uint8Array(packet, 12).set(new Uint8Array(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength))
+      new Uint8Array(packet, 12).set(chunkData)
 
       try { peer.channel.send(packet) } catch (e) { break }
 
-      // show progress every 10%
       if (i % Math.max(1, Math.floor(totalChunks / 10)) === 0) {
         Boostlet.hint(`sending volume  ${Math.round(i / totalChunks * 100)}%`, 500)
       }
@@ -335,26 +282,26 @@
     }
 
     const vol = nvRef && nvRef.volumes && nvRef.volumes[0]
+    const isFullNifti = pendingVolumeMeta && pendingVolumeMeta.fullNifti
+    pendingVolumeMeta = null
 
-    if (vol && vol.img && vol.img.byteLength === assembled.byteLength) {
-      // volume already loaded and same size so write directly into it
+    if (!isFullNifti && vol && vol.img && vol.img.byteLength === assembled.byteLength) {
+      // raw voxel data and volume already loaded so write directly
       vol.img.set(assembled)
       nvRef.updateGLVolume && nvRef.updateGLVolume()
+      nvRef.drawScene && nvRef.drawScene()
       myHash = null
       Boostlet.hint('volume received', 2000)
-    } else if (pendingVolumeMeta) {
-      // no volume loaded so build a valid nifti file from the received header metadata
-      const nifti = buildNifti1(pendingVolumeMeta, assembled)
-      pendingVolumeMeta = null
-      const blob = new Blob([nifti], { type: 'application/octet-stream' })
+    } else {
+      // full nifti file or no volume loaded so load via blob
+      const blob = new Blob([assembled], { type: 'application/octet-stream' })
       const url = URL.createObjectURL(blob)
       nvRef.loadVolumes([{ url, name: 'received.nii' }]).then(() => {
         URL.revokeObjectURL(url)
+        nvRef.drawScene && nvRef.drawScene()
         myHash = null
         Boostlet.hint('volume received', 2000)
       }).catch(() => { Boostlet.hint('could not load received volume', 4000) })
-    } else {
-      Boostlet.hint('no volume metadata received', 4000)
     }
   }
 
