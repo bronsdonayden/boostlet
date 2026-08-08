@@ -15,37 +15,37 @@ let remoteEdit = false
 
 // register with sync so peers know this boostlet is active
 // and so incoming messages get routed here
-;(window.__boostlet_active = window.__boostlet_active || []).push({
+function applyRemoteCode(code) {
+  if (!window._numpyEditor) return
+  const cursor = window._numpyEditor.getCursorPosition()
+  remoteEdit = true
+  window._numpyEditor.setValue(code, -1)
+  window._numpyEditor.moveCursorToPosition(cursor)
+  setTimeout(() => { remoteEdit = false }, 0)
+}
+
+const syncEntry = {
   name: 'numpyBoostlet',
   url: 'https://boostlet.org/examples/numpyBoostlet.js',
   onMessage: function(msg) {
-    if (msg.type === 'numpy-edit') {
-      // peer is typing so update editor content without running
-      // save and restore cursor so local typing is not interrupted
-      if (window._numpyEditor && msg.code !== window._numpyEditor.getValue()) {
-        const cursor = window._numpyEditor.getCursorPosition()
-        remoteEdit = true
-        window._numpyEditor.setValue(msg.code, -1)
-        window._numpyEditor.moveCursorToPosition(cursor)
-        setTimeout(() => { remoteEdit = false }, 0)
-      }
+    if (msg.type === 'numpy-edit' && msg.code !== window._numpyEditor?.getValue()) {
+      applyRemoteCode(msg.code)
     }
     if (msg.type === 'numpy-run') {
-      // peer ran code so set content and run locally so both volumes stay in sync
-      if (!window._numpyEditor) return
-      const cursor = window._numpyEditor.getCursorPosition()
-      remoteEdit = true
-      window._numpyEditor.setValue(msg.code, -1)
-      window._numpyEditor.moveCursorToPosition(cursor)
-      setTimeout(() => { remoteEdit = false }, 0)
+      applyRemoteCode(msg.code)
       runCode(false)
     }
     if (msg.type === 'numpy-undo') {
-      // peer undid so restore our own snapshot to match
       undoCode(false)
     }
   }
-})
+}
+
+if (typeof window.registerBoostletSync === 'function') {
+  window.registerBoostletSync(syncEntry)
+} else {
+  ;(window.__boostlet_active = window.__boostlet_active || []).push(syncEntry)
+}
 
 // load boostlet first then poll until niivue is detected
 const boostletScript = document.createElement('script');
