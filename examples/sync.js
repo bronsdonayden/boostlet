@@ -12,6 +12,11 @@
   const BUFFER_THRESHOLD = 1048576
   const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
 
+  // register a dropbox app at https://www.dropbox.com/developers/apps
+  // set the app key here and add the redirect url to your app settings
+  const DROPBOX_APP_KEY = ''
+  const DROPBOX_REDIRECT = 'https://aydenbronsdon.com/dropbox-callback'
+
   // ===== state =====
 
   const state = {
@@ -24,7 +29,9 @@
     applyingRemote: false,
     patchInterval: null,
     rafId: null,
-    pollId: null
+    pollId: null,
+    heartbeatWorker: null,
+    dropboxToken: null
   }
 
   // ===== public api =====
@@ -36,6 +43,7 @@
     if (state.pollId) clearInterval(state.pollId)
     if (state.patchInterval) clearInterval(state.patchInterval)
     if (state.rafId) cancelAnimationFrame(state.rafId)
+    if (state.heartbeatWorker) { state.heartbeatWorker.terminate(); state.heartbeatWorker = null }
     if (state.signal) state.signal.close()
     state.peers.forEach(peer => {
       if (peer.channel) peer.channel.close()
@@ -191,6 +199,206 @@
     updatePanel(code)
     if (scene.activeBoostlets?.length) promptBoostlets(scene.activeBoostlets)
     connectToRoom(code)
+  }
+
+  // ===== dropbox =====
+
+  // pkce helpers for oauth
+  function generateCodeVerifier() {
+    const arr = new Uint8Array(32)
+    crypto.getRandomValues(arr)
+    return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  async function generateCodeChallenge(verifier) {
+    const data = new TextEncoder().encode(verifier)
+    const digest = await crypto.subtle.digest('SHA-256', data)
+    return btoa(String.fromCharCode(...new Uint8Array(digest)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+
+  // opens a popup for dropbox oauth and returns an access token
+  // the redirect page at DROPBOX_REDIRECT posts the auth code back via postMessage
+  async function dropboxAuth() {
+    if (state.dropboxToken) return state.dropboxToken
+    if (!DROPBOX_APP_KEY) {
+      Boostlet.hint('no dropbox app key configured', 4000)
+      return null
+    }
+
+    const verifier = generateCodeVerifier()
+    const challenge = await generateCodeChallenge(verifier)
+
+    const authUrl = 'https://www.dropbox.com/oauth2/authorize'
+      + '?client_id=' + DROPBOX_APP_KEY
+      + '&response_type=code'
+      + '&code_challenge=' + challenge
+      + '&code_challenge_method=S256'
+      + '&redirect_uri=' + encodeURIComponent(DROPBOX_REDIRECT)
+      + '&token_access_type=online'
+
+    const popup = window.open(authUrl, 'dropbox_auth', 'width=500,height=700')
+    if (!popup) {
+      Boostlet.hint('popup blocked by browser', 4000)
+      return null
+    }
+
+    // wait for the redirect page to post the auth code back
+    const authCode = await new Promise((resolve) => {
+      const onMsg = (e) => {
+        if (e.data?.type === 'dropbox-auth') {
+          window.removeEventListener('message', onMsg)
+          resolve(e.data.code)
+        }
+      }
+      window.addEventListener('message', onMsg)
+      // if user closes popup without authorizing
+      const check = setInterval(() => {
+        if (popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) }
+      }, 500)
+    })
+
+    if (!authCode) {
+      Boostlet.hint('dropbox auth cancelled', 3000)
+      return null
+    }
+
+    // exchange auth code for access token
+    try {
+      const tokenRes = await fetch('https://api.dropboxapi.com/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code: authCode,
+          grant_type: 'authorization_code',
+          code_verifier: verifier,
+          client_id: DROPBOX_APP_KEY,
+          redirect_uri: DROPBOX_REDIRECT
+        })
+      })
+      const tokenData = await tokenRes.json()
+      if (!tokenData.access_token) {
+        Boostlet.hint('dropbox auth failed', 4000)
+        return null
+      }
+      state.dropboxToken = tokenData.access_token
+      return state.dropboxToken
+    } catch (e) {
+      Boostlet.hint('dropbox auth failed', 4000)
+      return null
+    }
+  }
+
+  async function uploadToDropbox(niftiData, filename) {
+    const token = await dropboxAuth()
+    if (!token) return null
+
+    try {
+      const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Dropbox-API-Arg': JSON.stringify({
+            path: '/boostlet-sync/' + filename,
+            mode: 'overwrite',
+            autorename: false
+          }),
+          'Content-Type': 'application/octet-stream'
+        },
+        body: niftiData
+      })
+
+      if (!uploadRes.ok) {
+        Boostlet.hint('dropbox upload failed', 4000)
+        return null
+      }
+    } catch (e) {
+      Boostlet.hint('dropbox upload failed', 4000)
+      return null
+    }
+
+    // create a shared link for the uploaded file
+    let linkData = null
+    try {
+      const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          path: '/boostlet-sync/' + filename,
+          settings: { requested_visibility: 'public', audience: 'public' }
+        })
+      })
+
+      // 409 means a shared link already exists for this path
+      if (linkRes.status === 409) {
+        const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ path: '/boostlet-sync/' + filename, direct_only: true })
+        })
+        const existingData = await existingRes.json()
+        linkData = existingData.links?.[0]
+      } else if (linkRes.ok) {
+        linkData = await linkRes.json()
+      }
+    } catch (e) {
+      Boostlet.hint('could not create dropbox link', 4000)
+      return null
+    }
+
+    if (!linkData?.url) {
+      Boostlet.hint('could not create dropbox link', 4000)
+      return null
+    }
+
+    // convert shared link to direct download url
+    return linkData.url
+      .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+      .replace(/[?&]dl=0/, '?dl=1')
+  }
+
+  async function uploadVolumeToDropbox() {
+    const vol = state.nv.volumes?.[0]
+    if (!vol?.img) {
+      Boostlet.hint('no volume to upload', 3000)
+      return
+    }
+
+    const nifti = buildNifti1({
+      dims: Array.from(vol.hdr.dims),
+      pixDims: Array.from(vol.hdr.pixDims),
+      datatypeCode: vol.hdr.datatypeCode,
+      numBitsPerVoxel: vol.hdr.numBitsPerVoxel,
+      scl_slope: vol.hdr.scl_slope,
+      scl_inter: vol.hdr.scl_inter,
+      sform_code: vol.hdr.sform_code,
+      qform_code: vol.hdr.qform_code,
+      affine: vol.hdr.affine
+    }, vol.img)
+
+    Boostlet.hint('uploading to dropbox', 3000)
+    const filename = 'volume_' + Date.now() + '.nii'
+    const url = await uploadToDropbox(nifti, filename)
+    if (!url) return
+
+    // patch the server scene with the dropbox volume url
+    // so late joiners can load without a live peer
+    const code = new URLSearchParams(location.search).get('sync')
+    if (code) {
+      await fetch(`${SCENE_API}/${code}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volumeUrl: url })
+      }).catch(() => {})
+    }
+
+    Boostlet.hint('volume uploaded to dropbox', 3000)
   }
 
   // ===== volume transfer =====
@@ -361,6 +569,22 @@
     }
   }
 
+  // ===== heartbeat =====
+
+  // web worker timers are not throttled in background tabs
+  // so the signal server keeps seeing activity even when the tab is hidden
+  function startHeartbeatWorker() {
+    const code = 'setInterval(function() { postMessage("ping") }, 20000)'
+    const blob = new Blob([code], { type: 'application/javascript' })
+    const worker = new Worker(URL.createObjectURL(blob))
+    worker.onmessage = () => {
+      if (state.signal?.readyState === WebSocket.OPEN) {
+        state.signal.send(JSON.stringify({ type: 'ping' }))
+      }
+    }
+    state.heartbeatWorker = worker
+  }
+
   // ===== rtc room =====
 
   function connectToRoom(code) {
@@ -385,6 +609,7 @@
       if (handler) Promise.resolve(handler(msg)).catch(() => {})
     }
 
+    startHeartbeatWorker()
     startBroadcasting()
   }
 
@@ -479,7 +704,14 @@
   function getPeer(peerId, createChannel) {
     if (state.peers.has(peerId)) return state.peers.get(peerId)
     const conn = new RTCPeerConnection(ICE_CONFIG)
-    const peer = { conn, channel: null, pendingCandidates: [], remoteDescSet: false, verified: false }
+    const peer = {
+      conn,
+      channel: null,
+      pendingCandidates: [],
+      remoteDescSet: false,
+      verified: false,
+      isOfferer: createChannel
+    }
     state.peers.set(peerId, peer)
     conn.onicecandidate = (e) => { if (e.candidate) sendSignal('ice', peerId, e.candidate) }
     conn.ondatachannel = (e) => wireChannel(peerId, e.channel)
@@ -497,13 +729,12 @@
     channel.binaryType = 'arraybuffer'
 
     channel.onopen = async () => {
+      // always send hash hello even if we have no volume
+      // so the other side knows our state and can decide to send
       const hash = await hashVolume()
-      if (hash) {
-        try { channel.send(JSON.stringify({ type: 'hash-hello', hash })) } catch (e) {}
-      } else {
-        // no volume loaded so accept immediately
+      try { channel.send(JSON.stringify({ type: 'hash-hello', hash })) } catch (e) {}
+      if (!hash) {
         peer.verified = true
-        try { channel.send(JSON.stringify({ type: 'hash-result', match: true })) } catch (e) {}
         Boostlet.hint('peer connected', 2000)
       }
     }
@@ -516,8 +747,8 @@
       // hash handshake is hello then result with no further replies
       if (msg.type === 'hash-hello') { handleHashHello(peerId, msg.hash); return }
       if (msg.type === 'hash-result') {
-        peer.verified = msg.match
-        Boostlet.hint(msg.match ? 'peer connected' : 'peer volume mismatch', msg.match ? 2000 : 5000)
+        peer.verified = true
+        Boostlet.hint(msg.match ? 'peer connected' : 'volume incoming from peer', msg.match ? 2000 : 3000)
         return
       }
 
@@ -546,10 +777,20 @@
     const peer = state.peers.get(peerId)
     if (!peer) return
     const localHash = await hashVolume()
-    const match = !localHash || localHash === remoteHash
-    peer.verified = match
+
+    // both null means neither side has a volume loaded
+    const match = localHash === remoteHash || (!localHash && !remoteHash)
+    peer.verified = true
     try { peer.channel.send(JSON.stringify({ type: 'hash-result', match })) } catch (e) {}
-    Boostlet.hint(match ? 'peer connected' : 'peer volume mismatch', match ? 2000 : 5000)
+
+    if (!match && localHash && peer.isOfferer) {
+      // we have a volume and the peer has none or a different one
+      // only the offerer sends to avoid both sides sending at once
+      Boostlet.hint('sending volume to peer', 2000)
+      sendVolumeToPeer(peer)
+    } else {
+      Boostlet.hint(match ? 'peer connected' : 'peer volume mismatch', match ? 2000 : 5000)
+    }
   }
 
   function broadcast(msg) {
@@ -666,6 +907,21 @@
     const codeRow = el('div', 'display:flex;align-items:center;gap:8px')
     codeRow.append(el('span', 'color:#4a4;letter-spacing:.1em;font-size:13px', code), copyBtn)
     row.append(codeRow, sendVolBtn)
+
+    // dropbox upload button shows if an app key is configured
+    // user authenticates with their own dropbox account via oauth popup
+    if (DROPBOX_APP_KEY) {
+      const dropboxBtn = el('button', `${BTN_CSS};background:#0061fe;color:#fff;margin-top:2px`, 'save to dropbox')
+      dropboxBtn.onclick = async () => {
+        dropboxBtn.disabled = true
+        dropboxBtn.textContent = 'uploading...'
+        await uploadVolumeToDropbox()
+        dropboxBtn.disabled = false
+        dropboxBtn.textContent = 'save to dropbox'
+      }
+      row.append(dropboxBtn)
+    }
+
     status.replaceWith(row)
   }
 
