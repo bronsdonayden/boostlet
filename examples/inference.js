@@ -2,20 +2,27 @@
   if (window.__inference_active) return
   window.__inference_active = true
 
+  const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
   const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/'
   const SIZE = 256
 
-  // load ort then show drop zone
-  if (!window.ort) {
+  // load boostlet then ort then show ui
+  function loadScript(url, cb) {
     const s = document.createElement('script')
-    s.src = ORT_CDN + 'ort.min.js'
-    s.onload = () => { ort.env.wasm.wasmPaths = ORT_CDN; init() }
+    s.src = url; s.onload = cb
     document.head.appendChild(s)
-  } else { init() }
+  }
 
-  function init() {
+  function start() {
+    if (!window.Boostlet) { loadScript(BOOSTLET_URL, start); return }
     Boostlet.init()
+    if (!window.ort) { loadScript(ORT_CDN + 'ort.min.js', () => { ort.env.wasm.wasmPaths = ORT_CDN; showUI() }); return }
+    showUI()
+  }
+
+  function showUI() {
     const nv = Boostlet.framework.instance
+    if (!nv?.volumes?.length) { Boostlet.hint('no volume loaded', 3000); return }
     const box = document.createElement('div')
     box.style.cssText = 'position:fixed;top:20px;right:20px;z-index:999999;background:#111;border:2px dashed #555;padding:20px;font:12px monospace;color:#aaa;cursor:pointer'
     box.textContent = 'drop .onnx here'
@@ -69,5 +76,5 @@
     el.textContent = 'done'; el.style.color = '#4a4'
   }
 
-  boot()
+  start()
 })()
