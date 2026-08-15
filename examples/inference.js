@@ -3,20 +3,29 @@
   window.__inference_active = true
 
   const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
-  const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.0/dist/'
+  const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/'
   const SIZE = 256
   const CHANNELS = 3
 
   function loadScript(url, cb) {
     const s = document.createElement('script')
-    s.src = url; s.onload = cb
+    s.src = url; s.onload = cb; s.onerror = () => console.error('failed to load', url)
     document.head.appendChild(s)
   }
 
   function start() {
     if (!window.Boostlet) { loadScript(BOOSTLET_URL, start); return }
     Boostlet.init()
-    if (!window.ort) { loadScript(ORT_CDN + 'ort.min.js', () => { ort.env.wasm.wasmPaths = ORT_CDN; ort.env.wasm.numThreads = 1; showUI() }); return }
+    if (!window.ort) {
+      loadScript(ORT_CDN + 'ort.min.js', () => {
+        console.log('ort loaded', ort.env.versions)
+        ort.env.wasm.numThreads = 1
+        ort.env.wasm.simd = false
+        ort.env.wasm.wasmPaths = ORT_CDN
+        showUI()
+      })
+      return
+    }
     showUI()
   }
 
@@ -34,11 +43,17 @@
 
   async function go(nv, file, el) {
     if (!file) return
-    el.textContent = 'loading...'
+    el.textContent = 'loading model...'
+    console.log('loading model', file.name, file.size, 'bytes')
     try {
-      const session = await ort.InferenceSession.create(await file.arrayBuffer(), { executionProviders: ['wasm'] })
+      const buf = await file.arrayBuffer()
+      console.log('arraybuffer ready', buf.byteLength)
+      const session = await ort.InferenceSession.create(buf)
+      console.log('session created', session.inputNames, session.outputNames)
+
       const vol = nv.volumes[0], d = vol.hdr.dims
       const X = d[1], Y = d[2], Z = d[3]
+      console.log('volume dims', X, Y, Z)
       const sl = vol.hdr.scl_slope || 1, si = vol.hdr.scl_inter || 0
       const lo = vol.cal_min, rng = (vol.cal_max - lo) || 1
       const mask = new Uint8Array(X * Y * Z)
@@ -81,6 +96,7 @@
     } catch (e) {
       el.textContent = 'error'; el.style.color = '#f44'
       console.error('inference failed', e)
+      console.error('stack', e?.stack || 'no stack')
     }
   }
 
