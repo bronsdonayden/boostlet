@@ -332,11 +332,10 @@
     const token = await dropboxAuth()
     if (!token) return null
 
-    // upload path is relative to app folder root
-    // sharing api needs the full absolute path including the app folder prefix
+    // path is relative to app folder root
     const path = '/' + filename
-    const absolutePath = '/Apps/BoostletSync/' + filename
 
+    let fileId = null
     try {
       const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
@@ -348,20 +347,25 @@
         body: niftiData
       })
       if (!uploadRes.ok) { Boostlet.hint('dropbox upload failed', 4000); return null }
+      // use the file id from upload response so sharing api works regardless of access type
+      const uploadData = await uploadRes.json()
+      fileId = uploadData.id
     } catch (e) { Boostlet.hint('dropbox upload failed', 4000); return null }
+
+    if (!fileId) { Boostlet.hint('dropbox upload failed', 4000); return null }
 
     let linkData = null
     try {
       const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: absolutePath, settings: { requested_visibility: 'public', audience: 'public' } })
+        body: JSON.stringify({ path: fileId, settings: { requested_visibility: 'public', audience: 'public' } })
       })
       if (linkRes.status === 409) {
         const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: absolutePath, direct_only: true })
+          body: JSON.stringify({ path: fileId, direct_only: true })
         })
         const existingData = await existingRes.json()
         linkData = existingData.links?.[0]
