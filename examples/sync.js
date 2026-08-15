@@ -14,9 +14,9 @@
 
   // register a dropbox app at https://www.dropbox.com/developers/apps
   // set the app key here and add the redirect url to your app settings
+  // paths are relative to the app folder root since we use app folder access type
   const DROPBOX_APP_KEY = '4ugn042y7wktv7t'
   const DROPBOX_REDIRECT = 'https://bronsdonayden.github.io/boostlet/dropbox-callback.html'
-  const DROPBOX_SCENE_PATH = '/boostlet-sync/scenes'
 
   // ===== state =====
 
@@ -211,14 +211,15 @@
 
   // ===== dropbox scene storage =====
 
-  // scene snapshots live at /boostlet-sync/scenes/{code}.json in the host's dropbox
-  // joiners fetch the file directly using the shared link stored in dropbox
+  // scene snapshots live at /scenes/{code}.json relative to the app folder root
+  // volumes live at /{filename} relative to the app folder root
+  // joiners authenticate with their own dropbox account and fetch directly
 
   async function writeSceneToDropbox(code, scene) {
     const token = await dropboxAuth()
     if (!token) return
 
-    const path = `${DROPBOX_SCENE_PATH}/${code}.json`
+    const path = `/scenes/${code}.json`
     const data = new TextEncoder().encode(JSON.stringify(scene))
 
     try {
@@ -238,7 +239,7 @@
     const token = await dropboxAuth()
     if (!token) throw new Error('no dropbox token')
 
-    const path = `${DROPBOX_SCENE_PATH}/${code}.json`
+    const path = `/scenes/${code}.json`
 
     const res = await fetch('https://content.dropboxapi.com/2/files/download', {
       method: 'POST',
@@ -331,16 +332,15 @@
     const token = await dropboxAuth()
     if (!token) return null
 
+    // path is relative to app folder root
+    const path = '/' + filename
+
     try {
       const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer ' + token,
-          'Dropbox-API-Arg': JSON.stringify({
-            path: '/boostlet-sync/' + filename,
-            mode: 'overwrite',
-            autorename: false
-          }),
+          'Dropbox-API-Arg': JSON.stringify({ path, mode: 'overwrite', autorename: false }),
           'Content-Type': 'application/octet-stream'
         },
         body: niftiData
@@ -353,13 +353,13 @@
       const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: '/boostlet-sync/' + filename, settings: { requested_visibility: 'public', audience: 'public' } })
+        body: JSON.stringify({ path, settings: { requested_visibility: 'public', audience: 'public' } })
       })
       if (linkRes.status === 409) {
         const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: '/boostlet-sync/' + filename, direct_only: true })
+          body: JSON.stringify({ path, direct_only: true })
         })
         const existingData = await existingRes.json()
         linkData = existingData.links?.[0]
@@ -570,7 +570,7 @@
     state.channel = channel
 
     // fired once when our subscription succeeds
-    // members.me.id is our pusher-assigned socket id
+    // members.me.id is our pusher assigned socket id
     channel.bind('pusher:subscription_succeeded', (members) => {
       state.selfId = members.me.id
 
@@ -584,12 +584,12 @@
       Boostlet.hint('could not join sync room', 4000)
     })
 
-    // new peer joined — we send them an offer
+    // new peer joined so we send them an offer
     channel.bind('pusher:member_added', (member) => {
       makeOffer(member.id)
     })
 
-    // peer left — clean up their rtc connection
+    // peer left so clean up their rtc connection
     channel.bind('pusher:member_removed', (member) => {
       removePeer(member.id)
     })
