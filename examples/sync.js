@@ -332,8 +332,10 @@
     const token = await dropboxAuth()
     if (!token) return null
 
-    // path is relative to app folder root
+    // upload path is relative to app folder root
+    // sharing api needs the full absolute path including the app folder prefix
     const path = '/' + filename
+    const absolutePath = '/Apps/BoostletSync/' + filename
 
     try {
       const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
@@ -353,13 +355,13 @@
       const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, settings: { requested_visibility: 'public', audience: 'public' } })
+        body: JSON.stringify({ path: absolutePath, settings: { requested_visibility: 'public', audience: 'public' } })
       })
       if (linkRes.status === 409) {
         const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path, direct_only: true })
+          body: JSON.stringify({ path: absolutePath, direct_only: true })
         })
         const existingData = await existingRes.json()
         linkData = existingData.links?.[0]
