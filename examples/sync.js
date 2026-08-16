@@ -175,14 +175,15 @@
     updatePanel(code)
     connectToRoom(code)
 
-    // write initial scene snapshot to dropbox and embed the public url in the sync link
-    // so joiners can fetch the scene without needing their own dropbox auth
+    // write initial scene snapshot to dropbox and store the public url in kv
+    // keyed by room code so joiners can fetch it with just the code
     const sceneUrl = await writeSceneToDropbox(code, readScene(true))
     if (sceneUrl) {
-      const p = new URLSearchParams(location.search)
-      p.set('sync', code)
-      p.set('scene', sceneUrl)
-      history.replaceState(null, '', `${location.pathname}?${p}${location.hash}`)
+      await fetch(`${PUSHER_AUTH_URL}/scene`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, sceneUrl })
+      }).catch(() => {})
     }
 
     // patch dropbox scene snapshot every 3s with current display state
@@ -195,19 +196,19 @@
 
   async function joinScene(code) {
     state.roomCode = code
-    const sceneUrl = new URLSearchParams(location.search).get('scene')
     let scene
 
-    if (sceneUrl) {
-      try {
-        scene = await readSceneFromDropbox(sceneUrl)
-      } catch (e) {
-        Boostlet.hint('could not load scene from dropbox', 4000)
+    // look up the scene url from kv using the room code
+    try {
+      const res = await fetch(`${PUSHER_AUTH_URL}/scene/${code}`)
+      if (res.ok) {
+        const { sceneUrl } = await res.json()
+        if (sceneUrl) scene = await readSceneFromDropbox(sceneUrl)
       }
-    }
+    } catch (e) {}
 
     if (!scene) {
-      // no scene url or fetch failed so just connect to the room
+      // no scene found so just connect to the room and wait for host
       updatePanel(code)
       connectToRoom(code)
       return
@@ -216,7 +217,6 @@
     if (scene.originUrl && !isSamePage(scene.originUrl, location.href)) {
       const target = new URL(scene.originUrl)
       target.searchParams.set('sync', code)
-      if (sceneUrl) target.searchParams.set('scene', sceneUrl)
       location.href = target.toString()
       return
     }
@@ -450,9 +450,11 @@
       scene.volumeUrl = url
       const sceneUrl = await writeSceneToDropbox(state.roomCode, scene)
       if (sceneUrl) {
-        const p = new URLSearchParams(location.search)
-        p.set('scene', sceneUrl)
-        history.replaceState(null, '', `${location.pathname}?${p}${location.hash}`)
+        await fetch(`${PUSHER_AUTH_URL}/scene`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: state.roomCode, sceneUrl })
+        }).catch(() => {})
       }
     }
 
