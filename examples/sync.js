@@ -281,9 +281,14 @@
       }
       if (!linkData?.url) return null
       // convert to direct download url
-      return linkData.url
-        .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-        .replace(/[?&]dl=0/, '?dl=1')
+      // replace dl=0 with dl=1 if present otherwise append it as a param
+      let directUrl = linkData.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+      if (directUrl.includes('dl=0')) {
+        directUrl = directUrl.replace('dl=0', 'dl=1')
+      } else {
+        directUrl += (directUrl.includes('?') ? '&' : '?') + 'dl=1'
+      }
+      return directUrl
     } catch (e) { return null }
   }
 
@@ -418,9 +423,13 @@
 
     if (!linkData?.url) { Boostlet.hint('could not create dropbox link', 4000); return null }
 
-    return linkData.url
-      .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-      .replace(/[?&]dl=0/, '?dl=1')
+    let directUrl = linkData.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+    if (directUrl.includes('dl=0')) {
+      directUrl = directUrl.replace('dl=0', 'dl=1')
+    } else {
+      directUrl += (directUrl.includes('?') ? '&' : '?') + 'dl=1'
+    }
+    return directUrl
   }
 
   async function uploadVolumeToDropbox() {
