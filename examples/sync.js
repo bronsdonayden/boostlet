@@ -175,8 +175,15 @@
     updatePanel(code)
     connectToRoom(code)
 
-    // write initial scene snapshot to dropbox so late joiners can load it
-    await writeSceneToDropbox(code, readScene(true))
+    // write initial scene snapshot to dropbox and embed the public url in the sync link
+    // so joiners can fetch the scene without needing their own dropbox auth
+    const sceneUrl = await writeSceneToDropbox(code, readScene(true))
+    if (sceneUrl) {
+      const p = new URLSearchParams(location.search)
+      p.set('sync', code)
+      p.set('scene', sceneUrl)
+      history.replaceState(null, '', `${location.pathname}?${p}${location.hash}`)
+    }
 
     // patch dropbox scene snapshot every 3s with current display state
     state.patchInterval = setInterval(async () => {
@@ -188,17 +195,28 @@
 
   async function joinScene(code) {
     state.roomCode = code
+    const sceneUrl = new URLSearchParams(location.search).get('scene')
     let scene
-    try {
-      scene = await readSceneFromDropbox(code)
-    } catch (e) {
-      Boostlet.hint(`sync code ${code} not found`, 4000)
-      showPanel(); hostScene(); return
+
+    if (sceneUrl) {
+      try {
+        scene = await readSceneFromDropbox(sceneUrl)
+      } catch (e) {
+        Boostlet.hint('could not load scene from dropbox', 4000)
+      }
+    }
+
+    if (!scene) {
+      // no scene url or fetch failed so just connect to the room
+      updatePanel(code)
+      connectToRoom(code)
+      return
     }
 
     if (scene.originUrl && !isSamePage(scene.originUrl, location.href)) {
       const target = new URL(scene.originUrl)
       target.searchParams.set('sync', code)
+      if (sceneUrl) target.searchParams.set('scene', sceneUrl)
       location.href = target.toString()
       return
     }
@@ -215,15 +233,18 @@
   // volumes live at /{filename} relative to the app folder root
   // joiners authenticate with their own dropbox account and fetch directly
 
+  // upload scene json to dropbox and return a public direct download url
+  // the url is embedded in the sync link so joiners can fetch it without auth
   async function writeSceneToDropbox(code, scene) {
     const token = await dropboxAuth()
-    if (!token) return
+    if (!token) return null
 
     const path = `/scenes/${code}.json`
     const data = new TextEncoder().encode(JSON.stringify(scene))
 
+    let fileId = null
     try {
-      await fetch('https://content.dropboxapi.com/2/files/upload', {
+      const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer ' + token,
@@ -232,23 +253,43 @@
         },
         body: data
       })
-    } catch (e) {}
+      if (!uploadRes.ok) return null
+      const uploadData = await uploadRes.json()
+      fileId = uploadData.id
+    } catch (e) { return null }
+
+    if (!fileId) return null
+
+    // create or fetch existing shared link so the joiner can fetch without auth
+    try {
+      const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fileId, settings: { requested_visibility: 'public', audience: 'public' } })
+      })
+      let linkData = null
+      if (linkRes.status === 409) {
+        const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: fileId, direct_only: true })
+        })
+        const existingData = await existingRes.json()
+        linkData = existingData.links?.[0]
+      } else if (linkRes.ok) {
+        linkData = await linkRes.json()
+      }
+      if (!linkData?.url) return null
+      // convert to direct download url
+      return linkData.url
+        .replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+        .replace(/[?&]dl=0/, '?dl=1')
+    } catch (e) { return null }
   }
 
-  async function readSceneFromDropbox(code) {
-    const token = await dropboxAuth()
-    if (!token) throw new Error('no dropbox token')
-
-    const path = `/scenes/${code}.json`
-
-    const res = await fetch('https://content.dropboxapi.com/2/files/download', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + token,
-        'Dropbox-API-Arg': JSON.stringify({ path })
-      }
-    })
-
+  // fetch scene json from a public dropbox url — no auth needed
+  async function readSceneFromDropbox(sceneUrl) {
+    const res = await fetch(sceneUrl)
     if (!res.ok) throw new Error('scene not found')
     return res.json()
   }
@@ -298,7 +339,8 @@
       }
       window.addEventListener('message', onMsg)
       const check = setInterval(() => {
-        if (popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) }
+        try { if (popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) } }
+        catch (e) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) }
       }, 500)
     })
 
@@ -402,11 +444,16 @@
     const url = await uploadToDropbox(nifti, filename)
     if (!url) return
 
-    // patch scene snapshot with volume url so late joiners can load it
+    // patch scene snapshot with volume url and update the sync link
     if (state.roomCode) {
       const scene = readScene(true)
       scene.volumeUrl = url
-      await writeSceneToDropbox(state.roomCode, scene)
+      const sceneUrl = await writeSceneToDropbox(state.roomCode, scene)
+      if (sceneUrl) {
+        const p = new URLSearchParams(location.search)
+        p.set('scene', sceneUrl)
+        history.replaceState(null, '', `${location.pathname}?${p}${location.hash}`)
+      }
     }
 
     Boostlet.hint('volume uploaded to dropbox', 3000)
