@@ -239,7 +239,9 @@
     const token = await dropboxAuth()
     if (!token) return null
 
-    const path = `/scenes/${code}.json`
+    // use a timestamped filename so each write gets a fresh file and a fresh link
+    // avoids stale cached shared links from dropbox
+    const path = `/scenes/${code}_${Date.now()}.json`
     const data = new TextEncoder().encode(JSON.stringify(scene))
 
     let fileId = null
