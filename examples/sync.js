@@ -640,9 +640,13 @@
     channel.bind('pusher:subscription_succeeded', (members) => {
       state.selfId = members.me.id
 
-      // initiate offers to all peers already in the room
+      // initiate offers to peers already in the room if our id is greater
+      // tiebreaker ensures only one side offers to avoid double offer race
       members.each(member => {
-        if (member.id !== state.selfId) makeOffer(member.id)
+        if (member.id !== state.selfId) {
+          if (state.selfId > member.id) makeOffer(member.id)
+          else getPeer(member.id, false)
+        }
       })
     })
 
@@ -650,9 +654,10 @@
       Boostlet.hint('could not join sync room', 4000)
     })
 
-    // new peer joined so we send them an offer
+    // new peer joined so we send them an offer if our id is greater
     channel.bind('pusher:member_added', (member) => {
-      makeOffer(member.id)
+      if (state.selfId > member.id) makeOffer(member.id)
+      else getPeer(member.id, false)
     })
 
     // peer left so clean up their rtc connection
@@ -720,6 +725,9 @@
 
   async function makeOffer(peerId) {
     if (!peerId || peerId === state.selfId) return
+    // tiebreaker so only one side offers when both peers join simultaneously
+    // the peer with the greater id always offers to avoid double offer race
+    if (state.selfId < peerId) return
     const peer = getPeer(peerId, true)
     if (peer.conn.signalingState !== 'stable') return
     const offer = await peer.conn.createOffer()
