@@ -644,7 +644,7 @@
       // tiebreaker ensures only one side offers to avoid double offer race
       members.each(member => {
         if (member.id !== state.selfId) {
-          if (state.selfId > member.id) makeOffer(member.id)
+          if (parseFloat(state.selfId) > parseFloat(member.id)) makeOffer(member.id)
           else getPeer(member.id, false)
         }
       })
@@ -656,7 +656,7 @@
 
     // new peer joined so we send them an offer if our id is greater
     channel.bind('pusher:member_added', (member) => {
-      if (state.selfId > member.id) makeOffer(member.id)
+      if (parseFloat(state.selfId) > parseFloat(member.id)) makeOffer(member.id)
       else getPeer(member.id, false)
     })
 
@@ -726,8 +726,8 @@
   async function makeOffer(peerId) {
     if (!peerId || peerId === state.selfId) return
     // tiebreaker so only one side offers when both peers join simultaneously
-    // the peer with the greater id always offers to avoid double offer race
-    if (state.selfId < peerId) return
+    // parse as float since pusher ids are strings like "1611570.28373"
+    if (parseFloat(state.selfId) < parseFloat(peerId)) return
     const peer = getPeer(peerId, true)
     if (peer.conn.signalingState !== 'stable') return
     const offer = await peer.conn.createOffer()
