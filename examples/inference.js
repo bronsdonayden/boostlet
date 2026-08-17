@@ -1,104 +1,198 @@
 ;(function () {
-  if (window.__inference_active) return
-  window.__inference_active = true
+  if (window.__onnx_demo_active) return
+  window.__onnx_demo_active = true
 
   const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
-  const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/'
-  const SIZE = 256
-  const CHANNELS = 3
+  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/'
+  const FALLBACK_SIZE = 256
 
-  function loadScript(url, cb) {
-    const s = document.createElement('script')
-    s.src = url; s.onload = cb; s.onerror = () => console.error('failed to load', url)
-    document.head.appendChild(s)
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = src
+      s.onload = resolve
+      s.onerror = () => reject(new Error('failed to load ' + src))
+      document.head.appendChild(s)
+    })
   }
 
-  function start() {
-    if (!window.Boostlet) { loadScript(BOOSTLET_URL, start); return }
+  async function start() {
+    if (!window.Boostlet) await loadScript(BOOSTLET_URL)
     Boostlet.init()
     if (!window.ort) {
-      loadScript(ORT_CDN + 'ort.min.js', () => {
-        console.log('ort loaded', ort.env.versions)
-        ort.env.wasm.numThreads = 1
-        ort.env.wasm.simd = false
-        ort.env.wasm.wasmPaths = ORT_CDN
-        showUI()
-      })
-      return
+      await loadScript(ORT_BASE + 'ort.min.js')
+      ort.env.wasm.numThreads = 1
+      ort.env.wasm.simd = false
+      ort.env.wasm.wasmPaths = ORT_BASE
     }
-    showUI()
+    showDropzone()
   }
 
-  function showUI() {
+  function showDropzone() {
     const nv = Boostlet.framework.instance
-    if (!nv?.volumes?.length) { Boostlet.hint('no volume loaded', 3000); return }
+    if (!nv?.volumes?.length) return Boostlet.hint('no volume loaded', 3000)
+
     const box = document.createElement('div')
-    box.style.cssText = 'position:fixed;top:20px;right:20px;z-index:999999;background:#111;border:2px dashed #555;padding:20px;font:12px monospace;color:#aaa;cursor:pointer'
+    box.style.cssText = [
+      'position:fixed;top:20px;right:20px;z-index:999999',
+      'background:#111;color:#ddd;border:2px dashed #666',
+      'padding:16px;font:12px monospace;cursor:pointer'
+    ].join(';')
     box.textContent = 'drop .onnx here'
     document.body.appendChild(box)
     box.ondragover = e => e.preventDefault()
-    box.ondrop = e => { e.preventDefault(); go(nv, e.dataTransfer.files[0], box) }
-    box.onclick = () => { const f = document.createElement('input'); f.type='file'; f.accept='.onnx'; f.onchange = () => go(nv, f.files[0], box); f.click() }
-  }
-
-  async function go(nv, file, el) {
-    if (!file) return
-    el.textContent = 'loading model...'
-    console.log('loading model', file.name, file.size, 'bytes')
-    try {
-      const buf = await file.arrayBuffer()
-      console.log('arraybuffer ready', buf.byteLength)
-      const session = await ort.InferenceSession.create(buf)
-      console.log('session created', session.inputNames, session.outputNames)
-
-      const vol = nv.volumes[0], d = vol.hdr.dims
-      const X = d[1], Y = d[2], Z = d[3]
-      console.log('volume dims', X, Y, Z)
-      const sl = vol.hdr.scl_slope || 1, si = vol.hdr.scl_inter || 0
-      const lo = vol.cal_min, rng = (vol.cal_max - lo) || 1
-      const mask = new Uint8Array(X * Y * Z)
-
-      for (let z = 0; z < Z; z++) {
-        const gray = new Float32Array(SIZE * SIZE)
-        for (let j = 0; j < SIZE; j++) for (let i = 0; i < SIZE; i++) {
-          const v = vol.img[Math.round(i * X / SIZE) + Math.round(j * Y / SIZE) * X + z * X * Y]
-          gray[j * SIZE + i] = Math.max(0, Math.min(1, (v * sl + si - lo) / rng))
-        }
-        const inp = new Float32Array(CHANNELS * SIZE * SIZE)
-        for (let c = 0; c < CHANNELS; c++) inp.set(gray, c * SIZE * SIZE)
-
-        const out = (await session.run({ [session.inputNames[0]]: new ort.Tensor('float32', inp, [1, CHANNELS, SIZE, SIZE]) }))[session.outputNames[0]].data
-        const px = SIZE * SIZE
-
-        for (let j = 0; j < Y; j++) for (let i = 0; i < X; i++) {
-          const idx = Math.round(j * SIZE / Y) * SIZE + Math.round(i * SIZE / X)
-          let val = out[idx]
-          if (val < 0 || val > 1) val = 1 / (1 + Math.exp(-val))
-          mask[i + j * X + z * X * Y] = val > 0.5 ? 1 : 0
-        }
-        if (z % 10 === 0) { el.textContent = z + '/' + Z; await new Promise(r => setTimeout(r, 0)) }
-      }
-
-      const h = new DataView(new ArrayBuffer(352))
-      h.setInt32(0, 348, true)
-      h.setInt16(40, 3, true); h.setInt16(42, X, true); h.setInt16(44, Y, true); h.setInt16(46, Z, true)
-      h.setInt16(70, 2, true); h.setInt16(72, 8, true)
-      for (let i = 0; i < 8; i++) h.setFloat32(76 + i * 4, vol.hdr.pixDims[i] || 1, true)
-      h.setFloat32(108, 352, true); h.setFloat32(112, 1, true)
-      h.setInt16(252, vol.hdr.qform_code || 1, true); h.setInt16(254, vol.hdr.sform_code || 1, true)
-      if (vol.hdr.affine) { let k = 0; for (let r = 0; r < 3; r++) for (let c = 0; c < 4; c++) h.setFloat32(280 + (k++) * 4, vol.hdr.affine[r][c] || 0, true) }
-      const hb = new Uint8Array(h.buffer); hb[344] = 110; hb[345] = 43; hb[346] = 49; hb[347] = 0
-      const nii = new Uint8Array(352 + mask.length); nii.set(hb); nii.set(mask, 352)
-      const url = URL.createObjectURL(new Blob([nii]))
-      await nv.addVolumeFromUrl({ url, colormap: 'red', opacity: 0.5 })
-      URL.revokeObjectURL(url); nv.drawScene?.()
-      el.textContent = 'done'; el.style.color = '#4a4'
-    } catch (e) {
-      el.textContent = 'error'; el.style.color = '#f44'
-      console.error('inference failed', e)
-      console.error('stack', e?.stack || 'no stack')
+    box.ondrop = e => { e.preventDefault(); runDemo(nv, e.dataTransfer.files[0], box) }
+    box.onclick = () => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.onnx'
+      input.onchange = () => runDemo(nv, input.files[0], box)
+      input.click()
     }
   }
 
-  start()
+  function inspectModel(session) {
+    if (session.inputNames.length !== 1) throw new Error('demo supports one input')
+    if (session.outputNames.length !== 1) throw new Error('demo supports one output')
+
+    const name = session.inputNames[0]
+    const meta = Array.isArray(session.inputMetadata)
+      ? session.inputMetadata[0]
+      : session.inputMetadata?.[name]
+    const shape = meta?.dimensions || meta?.dims || []
+    if (shape.length !== 4) throw new Error('expected 4D input, got ' + JSON.stringify(shape))
+
+    const channels = Number(shape[1]) || 1
+    const height = Number(shape[2]) || FALLBACK_SIZE
+    const width = Number(shape[3]) || FALLBACK_SIZE
+    if (channels !== 1 && channels !== 3) throw new Error('expected 1 or 3 channels, got ' + channels)
+
+    return { inputName: name, outputName: session.outputNames[0], channels, height, width }
+  }
+
+  function volumeRange(vol) {
+    if (Number.isFinite(vol.cal_min) && Number.isFinite(vol.cal_max) && vol.cal_max > vol.cal_min) {
+      return [vol.cal_min, vol.cal_max]
+    }
+    let lo = Infinity
+    let hi = -Infinity
+    for (const v of vol.img) {
+      if (v < lo) lo = v
+      if (v > hi) hi = v
+    }
+    return [lo, hi > lo ? hi : lo + 1]
+  }
+
+  function makeInputSlice(vol, z, cfg, range) {
+    const d = vol.hdr.dims
+    const X = d[1]
+    const Y = d[2]
+    const slope = vol.hdr.scl_slope || 1
+    const inter = vol.hdr.scl_inter || 0
+    const [lo, hi] = range
+    const gray = new Float32Array(cfg.width * cfg.height)
+
+    for (let y = 0; y < cfg.height; y++) {
+      const sy = Math.min(Y - 1, Math.floor(y * Y / cfg.height))
+      for (let x = 0; x < cfg.width; x++) {
+        const sx = Math.min(X - 1, Math.floor(x * X / cfg.width))
+        const raw = vol.img[sx + sy * X + z * X * Y]
+        gray[x + y * cfg.width] = Math.max(0, Math.min(1, (raw * slope + inter - lo) / (hi - lo)))
+      }
+    }
+    if (cfg.channels === 1) return gray
+
+    const input = new Float32Array(3 * gray.length)
+    input.set(gray, 0)
+    input.set(gray, gray.length)
+    input.set(gray, gray.length * 2)
+    return input
+  }
+
+  function decodeOutput(tensor, cfg) {
+    const data = tensor.data
+    const pixels = cfg.width * cfg.height
+    const mask = new Uint8Array(pixels)
+    if (data.length === pixels) {
+      for (let i = 0; i < pixels; i++) mask[i] = data[i] > 0.5 ? 1 : 0
+      return mask
+    }
+
+    const dims = tensor.dims || []
+    const channels = dims.length === 4 ? dims[1] : Math.floor(data.length / pixels)
+    if (channels <= 1 || data.length < channels * pixels) {
+      throw new Error('unsupported output shape: ' + JSON.stringify(dims))
+    }
+    for (let i = 0; i < pixels; i++) {
+      let best = 0
+      let bestVal = data[i]
+      for (let c = 1; c < channels; c++) {
+        const val = data[c * pixels + i]
+        if (val > bestVal) { bestVal = val; best = c }
+      }
+      mask[i] = best ? 1 : 0
+    }
+    return mask
+  }
+
+  function pasteMaskSlice(dst, src, z, X, Y, cfg) {
+    for (let y = 0; y < Y; y++) {
+      const sy = Math.min(cfg.height - 1, Math.floor(y * cfg.height / Y))
+      for (let x = 0; x < X; x++) {
+        const sx = Math.min(cfg.width - 1, Math.floor(x * cfg.width / X))
+        dst[x + y * X + z * X * Y] = src[sx + sy * cfg.width]
+      }
+    }
+  }
+
+  async function addOverlay(nv, baseVol, mask) {
+    const overlay = await baseVol.clone()
+    overlay.zeroImage()
+    overlay.img = mask
+    overlay.hdr.scl_slope = 1
+    overlay.hdr.scl_inter = 0
+    overlay.hdr.intent_code = 1002
+    overlay.colormap = 'red'
+    overlay.opacity = 0.5
+    await nv.addVolume(overlay)
+    nv.drawScene?.()
+  }
+
+  async function runDemo(nv, file, el) {
+    if (!file) return
+    try {
+      el.style.color = '#ddd'
+      el.textContent = 'loading model...'
+      const session = await ort.InferenceSession.create(await file.arrayBuffer())
+      const cfg = inspectModel(session)
+      const vol = nv.volumes[0]
+      const d = vol.hdr.dims
+      const X = d[1], Y = d[2], Z = d[3]
+      const maskVol = new Uint8Array(X * Y * Z)
+      const range = volumeRange(vol)
+      el.textContent = `model ${cfg.channels}x${cfg.height}x${cfg.width}`
+
+      for (let z = 0; z < Z; z++) {
+        const input = makeInputSlice(vol, z, cfg, range)
+        const feeds = { [cfg.inputName]: new ort.Tensor('float32', input, [1, cfg.channels, cfg.height, cfg.width]) }
+        const result = await session.run(feeds)
+        pasteMaskSlice(maskVol, decodeOutput(result[cfg.outputName], cfg), z, X, Y, cfg)
+        if (z % 5 === 0) {
+          el.textContent = `slice ${z + 1} / ${Z}`
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
+      }
+
+      el.textContent = 'adding overlay...'
+      await addOverlay(nv, vol, maskVol)
+      el.textContent = 'done'
+      el.style.color = '#5f5'
+    } catch (err) {
+      el.textContent = 'error'
+      el.style.color = '#f66'
+      console.error('ONNX demo failed:', err)
+    }
+  }
+
+  start().catch(console.error)
 })()
