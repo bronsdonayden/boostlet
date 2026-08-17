@@ -111,9 +111,16 @@
     if (dirty) nv.updateGLVolume?.()
   }
 
+  function isDropboxUrl(url) {
+    return url && (url.includes('dropboxusercontent.com') || url.includes('dropbox.com'))
+  }
+
   async function applyScene(scene) {
     const nv = state.nv
-    if (scene.volumeUrl && !nv.volumes?.length) {
+    // always load from dropbox even if a volume is already present
+    // a dropbox url means the host explicitly shared a modified volume
+    if (scene.volumeUrl && (isDropboxUrl(scene.volumeUrl) || !nv.volumes?.length)) {
+      Boostlet.hint('loading volume from dropbox', 3000)
       try { await nv.loadVolumes([{ url: scene.volumeUrl }]) }
       catch (e) { Boostlet.hint('could not load volume from url', 4000) }
     }
@@ -456,7 +463,8 @@
         setTimeout(() => { state.applyingRemote = false }, 0)
         return
       }
-      if (msg.type === 'volume-ready' && !state.nv.volumes?.length && msg.volumeUrl) {
+      if (msg.type === 'volume-ready' && msg.volumeUrl) {
+        // always load the dropbox volume regardless of whether a volume is already present
         Boostlet.hint('loading volume from dropbox', 3000)
         state.nv.loadVolumes([{ url: msg.volumeUrl }]).then(() => {
           if (msg.scene) { state.applyingRemote = true; applyDiff(msg.scene); setTimeout(() => { state.applyingRemote = false }, 0) }
