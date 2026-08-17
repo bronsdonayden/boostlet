@@ -19,6 +19,7 @@
   async function start() {
     if (!window.Boostlet) await loadScript(BOOSTLET_URL)
     Boostlet.init()
+    console.log('Boostlet initialized', Boostlet.framework?.name)
     if (!window.ort) {
       await loadScript(ORT_BASE + 'ort.min.js')
       ort.env.wasm.numThreads = 1
@@ -59,7 +60,7 @@
     const meta = Array.isArray(session.inputMetadata)
       ? session.inputMetadata[0]
       : session.inputMetadata?.[name]
-    const shape = meta?.dimensions || meta?.dims || []
+    const shape = meta?.shape || meta?.dimensions || meta?.dims || []
     if (shape.length !== 4) throw new Error('expected 4D input, got ' + JSON.stringify(shape))
 
     const channels = Number(shape[1]) || 1
@@ -188,7 +189,7 @@
       el.textContent = 'done'
       el.style.color = '#5f5'
     } catch (err) {
-      el.textContent = 'error'
+      el.textContent = 'error: ' + (err?.message || err)
       el.style.color = '#f66'
       console.error('ONNX demo failed:', err)
     }
