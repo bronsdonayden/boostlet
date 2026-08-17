@@ -166,7 +166,8 @@
       const vol = nv.volumes[0]
       const d = vol.hdr.dims
       const X = d[1], Y = d[2], Z = d[3]
-      const maskVol = new Uint8Array(X * Y * Z)
+      const TypedArrayCtor = vol.img?.constructor || Int16Array
+      const maskVol = new TypedArrayCtor(X * Y * Z)
       const range = volumeRange(vol)
       el.textContent = `model ${cfg.channels}x${cfg.height}x${cfg.width}`
 
