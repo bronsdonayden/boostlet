@@ -447,7 +447,8 @@
     const url = await uploadToDropbox(nifti, filename)
     if (!url) return
 
-    // patch scene snapshot with volume url and update the sync link
+    // build the scene manually with the dropbox url
+    // readScene(true) would read vol.url which is still a blob so volumeUrl would be null
     if (state.roomCode) {
       const scene = readScene(true)
       scene.volumeUrl = url
@@ -462,6 +463,9 @@
     }
 
     Boostlet.hint('volume uploaded to dropbox', 3000)
+    // notify connected peers so they can load the volume immediately
+    // without waiting to re-fetch the scene from kv
+    broadcast({ type: 'volume-ready', volumeUrl: url })
   }
 
   // ===== nifti builder =====
@@ -693,6 +697,16 @@
         state.applyingRemote = true
         applyDiff(msg.patch)
         setTimeout(() => { state.applyingRemote = false }, 0)
+        return
+      }
+      if (msg.type === 'volume-ready') {
+        const nv = state.nv
+        if (!nv.volumes?.length && msg.volumeUrl) {
+          Boostlet.hint('loading volume from dropbox', 3000)
+          nv.loadVolumes([{ url: msg.volumeUrl }]).catch(() => {
+            Boostlet.hint('could not load volume from dropbox', 4000)
+          })
+        }
         return
       }
       routeMessage(msg)
