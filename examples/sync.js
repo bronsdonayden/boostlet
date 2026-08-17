@@ -8,8 +8,6 @@
   const PUSHER_KEY = '1a1ef7128331ff9bbc00'
   const PUSHER_CLUSTER = 'us2'
   const PUSHER_AUTH_URL = 'https://boostlet-pusher-auth.bronsdonayden.workers.dev'
-  const CHUNK_SIZE = 65536
-  const BUFFER_THRESHOLD = 1048576
   const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
 
   // register a dropbox app at https://www.dropbox.com/developers/apps
@@ -38,7 +36,6 @@
   // ===== public api =====
 
   window.__sync_send = function (msg) { broadcast(msg) }
-  window.__sync_send_volume = function () { sendVolumeToAll() }
 
   window.__boostlet_sync_destroy = function () {
     if (state.pollId) clearInterval(state.pollId)
@@ -51,8 +48,6 @@
       peer.conn.close()
     })
     state.peers.clear()
-    incomingTransfers.clear()
-    pendingMetas.clear()
     const panel = document.getElementById('__sync_panel')
     if (panel) panel.remove()
     window.__boostlet_sync_injected = false
@@ -154,7 +149,7 @@
     }
     if (nv.volumes?.length) applyDiff(scene)
     if (!nv.volumes?.length && !scene.volumeUrl) {
-      Boostlet.hint('waiting for host to share volume', 4000)
+      Boostlet.hint('waiting for host to share volume via dropbox', 4000)
     }
   }
 
@@ -294,7 +289,7 @@
     } catch (e) { return null }
   }
 
-  // fetch scene json from a public dropbox url — no auth needed
+  // fetch scene json from a public dropbox url no auth needed
   async function readSceneFromDropbox(sceneUrl) {
     const res = await fetch(sceneUrl)
     if (!res.ok) throw new Error('scene not found')
@@ -472,10 +467,7 @@
     Boostlet.hint('volume uploaded to dropbox', 3000)
   }
 
-  // ===== volume transfer (webrtc data channel) =====
-
-  const incomingTransfers = new Map()
-  const pendingMetas = new Map()
+  // ===== nifti builder =====
 
   function buildNifti1(meta, voxelData) {
     const hdrBuf = new ArrayBuffer(352)
@@ -504,123 +496,24 @@
     return nifti
   }
 
-  function sendVolumeToAll() {
-    state.peers.forEach(peer => {
-      if (peer.channel?.readyState === 'open') sendVolumeToPeer(peer)
-    })
-  }
+  // ===== hash check =====
 
-  async function sendVolumeToPeer(peer) {
-    const vol = state.nv.volumes?.[0]
-    if (!vol?.img) return
-
-    const arr = new Uint8Array(crypto.getRandomValues(new Uint8Array(4)).buffer)
-    const transferId = new DataView(arr.buffer).getUint32(0)
-
-    try {
-      peer.channel.send(JSON.stringify({
-        type: 'volume-meta',
-        transferId,
-        dims: Array.from(vol.hdr.dims),
-        pixDims: Array.from(vol.hdr.pixDims),
-        datatypeCode: vol.hdr.datatypeCode,
-        numBitsPerVoxel: vol.hdr.numBitsPerVoxel,
-        scl_slope: vol.hdr.scl_slope,
-        scl_inter: vol.hdr.scl_inter,
-        sform_code: vol.hdr.sform_code,
-        qform_code: vol.hdr.qform_code,
-        affine: vol.hdr.affine
-      }))
-    } catch (e) { return }
-
-    const data = new Uint8Array(vol.img.buffer, vol.img.byteOffset, vol.img.byteLength)
-    const totalChunks = Math.ceil(data.byteLength / CHUNK_SIZE)
-    Boostlet.hint(`sending volume to peer  ${totalChunks} chunks`, 2000)
-
-    for (let i = 0; i < totalChunks; i++) {
-      while (peer.channel.bufferedAmount > BUFFER_THRESHOLD) {
-        await new Promise(resolve => setTimeout(resolve, 50))
-      }
-      if (peer.channel.readyState !== 'open') break
-
-      const start = i * CHUNK_SIZE
-      const chunk = data.slice(start, Math.min(start + CHUNK_SIZE, data.byteLength))
-      const packet = new ArrayBuffer(12 + chunk.byteLength)
-      const hdr = new DataView(packet)
-      hdr.setUint32(0, transferId)
-      hdr.setUint32(4, i)
-      hdr.setUint32(8, totalChunks)
-      new Uint8Array(packet, 12).set(chunk)
-
-      try { peer.channel.send(packet) } catch (e) { break }
-
-      if (i % Math.max(1, Math.floor(totalChunks / 10)) === 0) {
-        Boostlet.hint(`sending volume  ${Math.round(i / totalChunks * 100)}%`, 500)
-      }
-    }
-  }
-
-  function receiveChunk(buffer) {
-    if (buffer.byteLength < 12) return
-    const hdr = new DataView(buffer)
-    const transferId = hdr.getUint32(0)
-    const chunkIndex = hdr.getUint32(4)
-    const totalChunks = hdr.getUint32(8)
-
-    if (!incomingTransfers.has(transferId)) {
-      incomingTransfers.set(transferId, { transferId, chunks: new Array(totalChunks), received: 0, total: totalChunks })
-    }
-    const transfer = incomingTransfers.get(transferId)
-    if (transfer.chunks[chunkIndex]) return
-    transfer.chunks[chunkIndex] = buffer.slice(12)
-    transfer.received++
-
-    if (transfer.received % Math.max(1, Math.floor(totalChunks / 10)) === 0) {
-      Boostlet.hint(`receiving volume  ${Math.round(transfer.received / totalChunks * 100)}%`, 500)
-    }
-    if (transfer.received === transfer.total) {
-      incomingTransfers.delete(transferId)
-      assembleVolume(transfer)
-    }
-  }
-
-  function assembleVolume(transfer) {
-    const totalBytes = transfer.chunks.reduce((sum, c) => sum + c.byteLength, 0)
-    const assembled = new Uint8Array(totalBytes)
-    let offset = 0
-    for (const chunk of transfer.chunks) { assembled.set(new Uint8Array(chunk), offset); offset += chunk.byteLength }
-
-    const nv = state.nv
-    const vol = nv.volumes?.[0]
-    const meta = pendingMetas.get(transfer.transferId)
-    if (meta) pendingMetas.delete(transfer.transferId)
-
-    if (!meta && vol?.img && vol.img.byteLength === assembled.byteLength) {
-      vol.img.set(assembled)
-      nv.updateGLVolume?.()
-      nv.drawScene?.()
-      state.myHash = null
-      Boostlet.hint('volume received', 2000)
-    } else if (meta) {
-      const nifti = buildNifti1(meta, assembled)
-      const blob = new Blob([nifti], { type: 'application/octet-stream' })
-      const url = URL.createObjectURL(blob)
-      nv.loadVolumes([{ url, name: 'received.nii' }]).then(() => {
-        URL.revokeObjectURL(url)
-        nv.drawScene?.()
-        state.myHash = null
-        Boostlet.hint('volume received', 2000)
-      }).catch(() => { Boostlet.hint('could not load received volume', 4000) })
-    } else {
-      Boostlet.hint('could not load received volume', 4000)
-    }
+  async function handleHashHello(peerId, remoteHash) {
+    const peer = state.peers.get(peerId)
+    if (!peer) return
+    const localHash = await hashVolume()
+    // null hashes mean no volume loaded on that side treat as match
+    const match = localHash === remoteHash || (!localHash && !remoteHash)
+    try { peer.channel.send(JSON.stringify({ type: 'hash-ack', match })) } catch (e) {}
+    // show hint on the side that received the hello
+    Boostlet.hint(match ? 'peer connected' : 'volumes differ on peers use dropbox to share', match ? 2000 : 6000)
   }
 
   // ===== pusher signaling =====
 
   function connectToRoom(code) {
     // pusher presence channels give us room membership for free
-    // client events (client-offer, client-answer, client-ice) carry webrtc signaling
+    // client events (client-offer client-answer client-ice) carry webrtc signaling
     // no custom websocket server needed
     const pusher = new Pusher(PUSHER_KEY, {
       cluster: PUSHER_CLUSTER,
@@ -769,7 +662,7 @@
   function getPeer(peerId, createChannel) {
     if (state.peers.has(peerId)) return state.peers.get(peerId)
     const conn = new RTCPeerConnection(ICE_CONFIG)
-    const peer = { conn, channel: null, pendingCandidates: [], remoteDescSet: false, verified: false, isOfferer: createChannel }
+    const peer = { conn, channel: null, pendingCandidates: [], remoteDescSet: false }
     state.peers.set(peerId, peer)
     conn.onicecandidate = (e) => { if (e.candidate) sendSignal('ice', peerId, e.candidate) }
     conn.ondatachannel = (e) => wireChannel(peerId, e.channel)
@@ -784,27 +677,21 @@
     const peer = state.peers.get(peerId)
     if (!peer) { channel.close(); return }
     peer.channel = channel
-    channel.binaryType = 'arraybuffer'
 
     channel.onopen = async () => {
       const hash = await hashVolume()
       try { channel.send(JSON.stringify({ type: 'hash-hello', hash })) } catch (e) {}
-      if (!hash) { peer.verified = true; Boostlet.hint('peer connected', 2000) }
     }
 
     channel.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) { receiveChunk(e.data); return }
+      if (typeof e.data !== 'string') return
       let msg; try { msg = JSON.parse(e.data) } catch { return }
 
       if (msg.type === 'hash-hello') { handleHashHello(peerId, msg.hash); return }
-      if (msg.type === 'hash-result') {
-        peer.verified = true
-        Boostlet.hint(msg.match ? 'peer connected' : 'volume incoming from peer', msg.match ? 2000 : 3000)
+      if (msg.type === 'hash-ack') {
+        Boostlet.hint(msg.match ? 'peer connected' : 'volumes differ on peers use dropbox to share', msg.match ? 2000 : 6000)
         return
       }
-      if (msg.type === 'volume-meta') { pendingMetas.set(msg.transferId, msg); return }
-      if (!peer.verified) return
-
       if (msg.type === 'scene-patch') {
         state.applyingRemote = true
         applyDiff(msg.patch)
@@ -815,29 +702,14 @@
     }
 
     channel.onclose = () => {
-      if (peer.channel === channel) { peer.channel = null; peer.verified = false }
-    }
-  }
-
-  async function handleHashHello(peerId, remoteHash) {
-    const peer = state.peers.get(peerId)
-    if (!peer) return
-    const localHash = await hashVolume()
-    const match = localHash === remoteHash || (!localHash && !remoteHash)
-    peer.verified = true
-    try { peer.channel.send(JSON.stringify({ type: 'hash-result', match })) } catch (e) {}
-    if (!match && localHash && peer.isOfferer) {
-      Boostlet.hint('sending volume to peer', 2000)
-      sendVolumeToPeer(peer)
-    } else {
-      Boostlet.hint(match ? 'peer connected' : 'peer volume mismatch', match ? 2000 : 5000)
+      if (peer.channel === channel) { peer.channel = null }
     }
   }
 
   function broadcast(msg) {
     const str = JSON.stringify(msg)
     state.peers.forEach(peer => {
-      if (peer.verified && peer.channel?.readyState === 'open') {
+      if (peer.channel?.readyState === 'open') {
         try { peer.channel.send(str) } catch (e) {}
       }
     })
@@ -929,27 +801,19 @@
       setTimeout(() => { copyBtn.textContent = 'copy link' }, 1500)
     })
 
-    const sendVolBtn = el('button', `${BTN_CSS};background:#222;color:#aaa;border:1px solid #555;margin-top:2px`, 'send volume to peers')
-    sendVolBtn.onclick = () => {
-      sendVolBtn.disabled = true
-      sendVolBtn.textContent = 'sending...'
-      window.__sync_send_volume()
-      setTimeout(() => { sendVolBtn.disabled = false; sendVolBtn.textContent = 'send volume to peers' }, 3000)
-    }
-
     const row = el('div', 'display:flex;flex-direction:column;gap:6px')
     const codeRow = el('div', 'display:flex;align-items:center;gap:8px')
     codeRow.append(el('span', 'color:#4a4;letter-spacing:.1em;font-size:13px', code), copyBtn)
-    row.append(codeRow, sendVolBtn)
+    row.append(codeRow)
 
     if (DROPBOX_APP_KEY) {
-      const dropboxBtn = el('button', `${BTN_CSS};background:#0061fe;color:#fff;margin-top:2px`, 'save to dropbox')
+      const dropboxBtn = el('button', `${BTN_CSS};background:#0061fe;color:#fff;margin-top:2px`, 'save volume to dropbox')
       dropboxBtn.onclick = async () => {
         dropboxBtn.disabled = true
         dropboxBtn.textContent = 'uploading...'
         await uploadVolumeToDropbox()
         dropboxBtn.disabled = false
-        dropboxBtn.textContent = 'save to dropbox'
+        dropboxBtn.textContent = 'save volume to dropbox'
       }
       row.append(dropboxBtn)
     }
