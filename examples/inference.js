@@ -59,20 +59,13 @@
   function inspectModel(session) {
     if (session.inputNames.length !== 1) throw new Error('demo supports one input')
     if (session.outputNames.length !== 1) throw new Error('demo supports one output')
-
-    const name = session.inputNames[0]
-    const meta = Array.isArray(session.inputMetadata)
-      ? session.inputMetadata[0]
-      : session.inputMetadata?.[name]
-    const shape = meta?.shape || meta?.dimensions || meta?.dims || []
-    if (shape.length !== 4) throw new Error('expected 4D input, got ' + JSON.stringify(shape))
-
-    const channels = Number(shape[1]) || 1
-    const height = Number(shape[2]) || FALLBACK_SIZE
-    const width = Number(shape[3]) || FALLBACK_SIZE
-    if (channels !== 1 && channels !== 3) throw new Error('expected 1 or 3 channels, got ' + channels)
-
-    return { inputName: name, outputName: session.outputNames[0], channels, height, width }
+    return {
+      inputName: session.inputNames[0],
+      outputName: session.outputNames[0],
+      channels: 3,
+      height: FALLBACK_SIZE,
+      width: FALLBACK_SIZE
+    }
   }
 
   function volumeRange(vol) {
