@@ -3,7 +3,7 @@
   window.__onnx_demo_active = true
 
   const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
-  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/'
+  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
   const FALLBACK_SIZE = 256
 
   function loadScript(src) {
