@@ -9,28 +9,16 @@
   const PUSHER_CLUSTER = 'us2'
   const PUSHER_AUTH_URL = 'https://boostlet-pusher-auth.bronsdonayden.workers.dev'
   const ICE_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
-
-  // register a dropbox app at https://www.dropbox.com/developers/apps
-  // set the app key here and add the redirect url to your app settings
-  // paths are relative to the app folder root since we use app folder access type
   const DROPBOX_APP_KEY = '4ugn042y7wktv7t'
   const DROPBOX_REDIRECT = 'https://bronsdonayden.github.io/boostlet/dropbox-callback.html'
 
   // ===== state =====
 
   const state = {
-    nv: null,
-    pusher: null,
-    channel: null,
-    peers: new Map(),
-    selfId: null,
-    myHash: null,
-    applyingRemote: false,
-    patchInterval: null,
-    rafId: null,
-    pollId: null,
-    dropboxToken: null,
-    roomCode: null
+    nv: null, pusher: null, channel: null,
+    peers: new Map(), selfId: null, myHash: null,
+    applyingRemote: false, rafId: null, pollId: null,
+    dropboxToken: null, roomCode: null
   }
 
   // ===== public api =====
@@ -39,30 +27,25 @@
 
   window.__boostlet_sync_destroy = function () {
     if (state.pollId) clearInterval(state.pollId)
-    if (state.patchInterval) clearInterval(state.patchInterval)
     if (state.rafId) cancelAnimationFrame(state.rafId)
     if (state.channel) state.channel.unbind_all()
     if (state.pusher) state.pusher.disconnect()
-    state.peers.forEach(peer => {
-      if (peer.channel) peer.channel.close()
-      peer.conn.close()
-    })
+    state.peers.forEach(peer => { peer.channel?.close(); peer.conn.close() })
     state.peers.clear()
-    const panel = document.getElementById('__sync_panel')
-    if (panel) panel.remove()
+    document.getElementById('__sync_panel')?.remove()
     window.__boostlet_sync_injected = false
   }
 
   // ===== bootstrap =====
 
-  if (window.Boostlet) {
-    waitForNv()
-  } else {
+  function loadScript(url, cb) {
     const s = document.createElement('script')
-    s.src = BOOSTLET_URL
-    s.onload = waitForNv
+    s.src = url; s.onload = cb
     document.head.appendChild(s)
   }
+
+  if (window.Boostlet) waitForNv()
+  else loadScript(BOOSTLET_URL, waitForNv)
 
   function waitForNv() {
     state.pollId = setInterval(() => {
@@ -71,36 +54,28 @@
         if (Boostlet.framework.name !== 'niivue') return
         const nv = Boostlet.framework.instance
         if (!nv?.volumes) return
-        clearInterval(state.pollId)
-        state.pollId = null
-        loadPusher(function () { start(nv) })
+        clearInterval(state.pollId); state.pollId = null
+        if (window.Pusher) start(nv)
+        else loadScript('https://js.pusher.com/8.4.0/pusher.min.js', () => start(nv))
       } catch (e) {}
     }, 300)
-  }
-
-  // load pusher js sdk from cdn then call cb
-  function loadPusher(cb) {
-    if (window.Pusher) { cb(); return }
-    const s = document.createElement('script')
-    s.src = 'https://js.pusher.com/8.4.0/pusher.min.js'
-    s.onload = cb
-    document.head.appendChild(s)
   }
 
   function start(nv) {
     state.nv = nv
     const code = new URLSearchParams(location.search).get('sync')
-    if (code) { joinScene(code) } else { showPanel(); hostScene() }
+    if (code) joinScene(code)
+    else { showPanel(); hostScene() }
   }
 
-  // ===== scene adapter =====
+  // ===== scene =====
 
   async function hashVolume() {
     if (state.myHash) return state.myHash
     const img = state.nv.volumes?.[0]?.img
     if (!img) return null
-    const digest = await crypto.subtle.digest('SHA-256', img)
-    state.myHash = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('')
+    const buf = await crypto.subtle.digest('SHA-256', img)
+    state.myHash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
     return state.myHash
   }
 
@@ -125,20 +100,15 @@
 
   function applyDiff(diff) {
     const nv = state.nv
-    if (diff.crosshairPos) {
-      nv.scene.crosshairPos = new Float32Array(diff.crosshairPos)
-      nv.drawScene?.()
-    }
-    if (diff.sliceType !== undefined && nv.opts.sliceType !== diff.sliceType) {
-      nv.setSliceType?.(diff.sliceType)
-    }
+    if (diff.crosshairPos) { nv.scene.crosshairPos = new Float32Array(diff.crosshairPos); nv.drawScene?.() }
+    if (diff.sliceType !== undefined && nv.opts.sliceType !== diff.sliceType) nv.setSliceType?.(diff.sliceType)
     const vol = nv.volumes?.[0]
     if (!vol) return
-    let needsUpdate = false
-    if (diff.colormap && diff.colormap !== vol.colormap) { nv.setColormap?.(vol.id, diff.colormap); needsUpdate = true }
-    if (diff.cal_min != null) { vol.cal_min = diff.cal_min; needsUpdate = true }
-    if (diff.cal_max != null) { vol.cal_max = diff.cal_max; needsUpdate = true }
-    if (needsUpdate) nv.updateGLVolume?.()
+    let dirty = false
+    if (diff.colormap && diff.colormap !== vol.colormap) { nv.setColormap?.(vol.id, diff.colormap); dirty = true }
+    if (diff.cal_min != null) { vol.cal_min = diff.cal_min; dirty = true }
+    if (diff.cal_max != null) { vol.cal_max = diff.cal_max; dirty = true }
+    if (dirty) nv.updateGLVolume?.()
   }
 
   async function applyScene(scene) {
@@ -148,63 +118,34 @@
       catch (e) { Boostlet.hint('could not load volume from url', 4000) }
     }
     if (nv.volumes?.length) applyDiff(scene)
-    if (!nv.volumes?.length && !scene.volumeUrl) {
-      Boostlet.hint('waiting for host to share volume via dropbox', 4000)
-    }
+    else if (!scene.volumeUrl) Boostlet.hint('waiting for host to share volume via dropbox', 4000)
   }
 
   // ===== host and join =====
 
-  function makeCode() {
-    return Math.random().toString(36).slice(2, 7)
-  }
-
   async function hostScene() {
     const code = makeCode()
     state.roomCode = code
-
     const params = new URLSearchParams(location.search)
     params.set('sync', code)
     history.replaceState(null, '', `${location.pathname}?${params}${location.hash}`)
-
     updatePanel(code)
     connectToRoom(code)
-
-    // write initial scene snapshot to dropbox and store the public url in kv
-    // keyed by room code so joiners can fetch it with just the code
-    const sceneUrl = await writeSceneToDropbox(code, readScene(true))
-    if (sceneUrl) {
-      await fetch(`${PUSHER_AUTH_URL}/scene`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, sceneUrl })
-      }).catch(() => {})
-    }
-
-    // no patch interval needed
-    // live scene state syncs over webrtc once peers connect
-    // dropbox scene snapshot only updates when the host explicitly saves the volume
+    await publishScene(code, readScene(true))
   }
 
   async function joinScene(code) {
     state.roomCode = code
     let scene
-
-    // look up the scene url from kv using the room code
     try {
       const res = await fetch(`${PUSHER_AUTH_URL}/scene/${code}`)
       if (res.ok) {
         const { sceneUrl } = await res.json()
-        if (sceneUrl) scene = await readSceneFromDropbox(sceneUrl)
+        if (sceneUrl) scene = await fetch(sceneUrl).then(r => r.json())
       }
     } catch (e) {}
 
-    if (!scene) {
-      // no scene found so just connect to the room and wait for host
-      updatePanel(code)
-      connectToRoom(code)
-      return
-    }
+    if (!scene) { updatePanel(code); connectToRoom(code); return }
 
     if (scene.originUrl && !isSamePage(scene.originUrl, location.href)) {
       const target = new URL(scene.originUrl)
@@ -219,26 +160,25 @@
     connectToRoom(code)
   }
 
-  // ===== dropbox scene storage =====
+  async function publishScene(code, scene) {
+    const sceneUrl = await dropboxUpload(`/scenes/${code}_${Date.now()}.json`, new TextEncoder().encode(JSON.stringify(scene)))
+    if (!sceneUrl) return
+    await fetch(`${PUSHER_AUTH_URL}/scene`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, sceneUrl })
+    }).catch(() => {})
+  }
 
-  // scene snapshots live at /scenes/{code}.json relative to the app folder root
-  // volumes live at /{filename} relative to the app folder root
-  // joiners authenticate with their own dropbox account and fetch directly
+  function makeCode() { return Math.random().toString(36).slice(2, 7) }
 
-  // upload scene json to dropbox and return a public direct download url
-  // the url is embedded in the sync link so joiners can fetch it without auth
-  async function writeSceneToDropbox(code, scene) {
+  // ===== dropbox =====
+
+  async function dropboxUpload(path, data) {
     const token = await dropboxAuth()
     if (!token) return null
-
-    // use a timestamped filename so each write gets a fresh file and a fresh link
-    // avoids stale cached shared links from dropbox
-    const path = `/scenes/${code}_${Date.now()}.json`
-    const data = new TextEncoder().encode(JSON.stringify(scene))
-
-    let fileId = null
     try {
-      const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
+      const res = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
           'Authorization': 'Bearer ' + token,
@@ -247,183 +187,36 @@
         },
         body: data
       })
-      if (!uploadRes.ok) return null
-      const uploadData = await uploadRes.json()
-      fileId = uploadData.id
-    } catch (e) { return null }
-
-    if (!fileId) return null
-
-    // create or fetch existing shared link so the joiner can fetch without auth
-    try {
-      const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: fileId, settings: { requested_visibility: 'public', audience: 'public' } })
-      })
-      let linkData = null
-      if (linkRes.status === 409) {
-        const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: fileId, direct_only: true })
-        })
-        const existingData = await existingRes.json()
-        linkData = existingData.links?.[0]
-      } else if (linkRes.ok) {
-        linkData = await linkRes.json()
-      }
-      if (!linkData?.url) return null
-      // convert to direct download url
-      // replace dl=0 with dl=1 if present otherwise append it as a param
-      let directUrl = linkData.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-      if (directUrl.includes('dl=0')) {
-        directUrl = directUrl.replace('dl=0', 'dl=1')
-      } else {
-        directUrl += (directUrl.includes('?') ? '&' : '?') + 'dl=1'
-      }
-      return directUrl
+      if (!res.ok) return null
+      const { id } = await res.json()
+      return dropboxSharedUrl(token, id)
     } catch (e) { return null }
   }
 
-  // fetch scene json from a public dropbox url no auth needed
-  async function readSceneFromDropbox(sceneUrl) {
-    const res = await fetch(sceneUrl)
-    if (!res.ok) throw new Error('scene not found')
-    return res.json()
-  }
-
-  // ===== dropbox oauth =====
-
-  function generateCodeVerifier() {
-    const arr = new Uint8Array(32)
-    crypto.getRandomValues(arr)
-    return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('')
-  }
-
-  async function generateCodeChallenge(verifier) {
-    const data = new TextEncoder().encode(verifier)
-    const digest = await crypto.subtle.digest('SHA-256', data)
-    return btoa(String.fromCharCode(...new Uint8Array(digest)))
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-  }
-
-  async function dropboxAuth() {
-    if (state.dropboxToken) return state.dropboxToken
-    if (!DROPBOX_APP_KEY) {
-      Boostlet.hint('no dropbox app key configured', 4000)
-      return null
-    }
-
-    const verifier = generateCodeVerifier()
-    const challenge = await generateCodeChallenge(verifier)
-
-    const authUrl = 'https://www.dropbox.com/oauth2/authorize'
-      + '?client_id=' + DROPBOX_APP_KEY
-      + '&response_type=code'
-      + '&code_challenge=' + challenge
-      + '&code_challenge_method=S256'
-      + '&redirect_uri=' + encodeURIComponent(DROPBOX_REDIRECT)
-      + '&token_access_type=online'
-
-    const popup = window.open(authUrl, 'dropbox_auth', 'width=500,height=700')
-    if (!popup) { Boostlet.hint('popup blocked by browser', 4000); return null }
-
-    const authCode = await new Promise((resolve) => {
-      const onMsg = (e) => {
-        if (e.data?.type === 'dropbox-auth') {
-          window.removeEventListener('message', onMsg)
-          resolve(e.data.code)
-        }
-      }
-      window.addEventListener('message', onMsg)
-      const check = setInterval(() => {
-        try { if (popup.closed) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) } }
-        catch (e) { clearInterval(check); window.removeEventListener('message', onMsg); resolve(null) }
-      }, 500)
-    })
-
-    if (!authCode) { Boostlet.hint('dropbox auth cancelled', 3000); return null }
-
-    try {
-      const tokenRes = await fetch('https://api.dropboxapi.com/oauth2/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code: authCode,
-          grant_type: 'authorization_code',
-          code_verifier: verifier,
-          client_id: DROPBOX_APP_KEY,
-          redirect_uri: DROPBOX_REDIRECT
-        })
-      })
-      const tokenData = await tokenRes.json()
-      if (!tokenData.access_token) { Boostlet.hint('dropbox auth failed', 4000); return null }
-      state.dropboxToken = tokenData.access_token
-      return state.dropboxToken
-    } catch (e) {
-      Boostlet.hint('dropbox auth failed', 4000)
-      return null
-    }
-  }
-
-  // ===== dropbox volume upload =====
-
-  async function uploadToDropbox(niftiData, filename) {
-    const token = await dropboxAuth()
-    if (!token) return null
-
-    // path is relative to app folder root
-    const path = '/' + filename
-
-    let fileId = null
-    try {
-      const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + token,
-          'Dropbox-API-Arg': JSON.stringify({ path, mode: 'overwrite', autorename: false }),
-          'Content-Type': 'application/octet-stream'
-        },
-        body: niftiData
-      })
-      if (!uploadRes.ok) { Boostlet.hint('dropbox upload failed', 4000); return null }
-      // use the file id from upload response so sharing api works regardless of access type
-      const uploadData = await uploadRes.json()
-      fileId = uploadData.id
-    } catch (e) { Boostlet.hint('dropbox upload failed', 4000); return null }
-
-    if (!fileId) { Boostlet.hint('dropbox upload failed', 4000); return null }
-
+  async function dropboxSharedUrl(token, fileId) {
+    const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
     let linkData = null
     try {
-      const linkRes = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      const res = await fetch('https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings', {
+        method: 'POST', headers,
         body: JSON.stringify({ path: fileId, settings: { requested_visibility: 'public', audience: 'public' } })
       })
-      if (linkRes.status === 409) {
-        const existingRes = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      if (res.status === 409) {
+        const ex = await fetch('https://api.dropboxapi.com/2/sharing/list_shared_links', {
+          method: 'POST', headers,
           body: JSON.stringify({ path: fileId, direct_only: true })
         })
-        const existingData = await existingRes.json()
-        linkData = existingData.links?.[0]
-      } else if (linkRes.ok) {
-        linkData = await linkRes.json()
+        linkData = (await ex.json()).links?.[0]
+      } else if (res.ok) {
+        linkData = await res.json()
       }
-    } catch (e) { Boostlet.hint('could not create dropbox link', 4000); return null }
+    } catch (e) { return null }
+    return linkData?.url ? directDropboxUrl(linkData.url) : null
+  }
 
-    if (!linkData?.url) { Boostlet.hint('could not create dropbox link', 4000); return null }
-
-    let directUrl = linkData.url.replace('www.dropbox.com', 'dl.dropboxusercontent.com')
-    if (directUrl.includes('dl=0')) {
-      directUrl = directUrl.replace('dl=0', 'dl=1')
-    } else {
-      directUrl += (directUrl.includes('?') ? '&' : '?') + 'dl=1'
-    }
-    return directUrl
+  function directDropboxUrl(url) {
+    let u = url.replace('www.dropbox.com', 'dl.dropboxusercontent.com')
+    return u.includes('dl=0') ? u.replace('dl=0', 'dl=1') : u + (u.includes('?') ? '&' : '?') + 'dl=1'
   }
 
   async function uploadVolumeToDropbox() {
@@ -431,48 +224,74 @@
     if (!vol?.img) { Boostlet.hint('no volume to upload', 3000); return }
 
     const nifti = buildNifti1({
-      dims: Array.from(vol.hdr.dims),
-      pixDims: Array.from(vol.hdr.pixDims),
-      datatypeCode: vol.hdr.datatypeCode,
-      numBitsPerVoxel: vol.hdr.numBitsPerVoxel,
-      scl_slope: vol.hdr.scl_slope,
-      scl_inter: vol.hdr.scl_inter,
-      sform_code: vol.hdr.sform_code,
-      qform_code: vol.hdr.qform_code,
+      dims: Array.from(vol.hdr.dims), pixDims: Array.from(vol.hdr.pixDims),
+      datatypeCode: vol.hdr.datatypeCode, numBitsPerVoxel: vol.hdr.numBitsPerVoxel,
+      scl_slope: vol.hdr.scl_slope, scl_inter: vol.hdr.scl_inter,
+      sform_code: vol.hdr.sform_code, qform_code: vol.hdr.qform_code,
       affine: vol.hdr.affine
     }, vol.img)
 
     Boostlet.hint('uploading to dropbox', 3000)
-    const filename = 'volume_' + Date.now() + '.nii'
-    const url = await uploadToDropbox(nifti, filename)
-    if (!url) return
+    const url = await dropboxUpload('/volume_' + Date.now() + '.nii', nifti)
+    if (!url) { Boostlet.hint('dropbox upload failed', 4000); return }
 
-    // build the scene manually with the dropbox url
-    // readScene(true) would read vol.url which is still a blob so volumeUrl would be null
     if (state.roomCode) {
       const scene = readScene(true)
       scene.volumeUrl = url
-      const sceneUrl = await writeSceneToDropbox(state.roomCode, scene)
-      if (sceneUrl) {
-        await fetch(`${PUSHER_AUTH_URL}/scene`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: state.roomCode, sceneUrl })
-        }).catch(() => {})
-      }
+      await publishScene(state.roomCode, scene)
     }
 
     Boostlet.hint('volume uploaded to dropbox', 3000)
-    // notify connected peers so they can load the volume immediately
-    // without waiting to re-fetch the scene from kv
     broadcast({ type: 'volume-ready', volumeUrl: url, scene: readScene(false) })
+  }
+
+  // ===== dropbox oauth =====
+
+  async function dropboxAuth() {
+    if (state.dropboxToken) return state.dropboxToken
+
+    const verifier = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+    const challenge = btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
+    const authUrl = 'https://www.dropbox.com/oauth2/authorize'
+      + '?client_id=' + DROPBOX_APP_KEY
+      + '&response_type=code&code_challenge=' + challenge
+      + '&code_challenge_method=S256&redirect_uri=' + encodeURIComponent(DROPBOX_REDIRECT)
+      + '&token_access_type=online'
+
+    const popup = window.open(authUrl, 'dropbox_auth', 'width=500,height=700')
+    if (!popup) { Boostlet.hint('popup blocked by browser', 4000); return null }
+
+    const authCode = await new Promise(resolve => {
+      const onMsg = e => { if (e.data?.type === 'dropbox-auth') { window.removeEventListener('message', onMsg); resolve(e.data.code) } }
+      window.addEventListener('message', onMsg)
+      const t = setInterval(() => {
+        try { if (popup.closed) { clearInterval(t); window.removeEventListener('message', onMsg); resolve(null) } }
+        catch (e) { clearInterval(t); window.removeEventListener('message', onMsg); resolve(null) }
+      }, 500)
+    })
+
+    if (!authCode) { Boostlet.hint('dropbox auth cancelled', 3000); return null }
+
+    try {
+      const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ code: authCode, grant_type: 'authorization_code', code_verifier: verifier, client_id: DROPBOX_APP_KEY, redirect_uri: DROPBOX_REDIRECT })
+      })
+      const data = await res.json()
+      if (!data.access_token) { Boostlet.hint('dropbox auth failed', 4000); return null }
+      state.dropboxToken = data.access_token
+      return state.dropboxToken
+    } catch (e) { Boostlet.hint('dropbox auth failed', 4000); return null }
   }
 
   // ===== nifti builder =====
 
   function buildNifti1(meta, voxelData) {
-    const hdrBuf = new ArrayBuffer(352)
-    const d = new DataView(hdrBuf)
+    const hdr = new ArrayBuffer(352)
+    const d = new DataView(hdr)
     d.setInt32(0, 348, true)
     for (let i = 0; i < 8; i++) d.setInt16(40 + i * 2, meta.dims[i] || 0, true)
     d.setInt16(70, meta.datatypeCode || 16, true)
@@ -485,133 +304,68 @@
     d.setInt16(254, meta.sform_code || 1, true)
     if (meta.affine) {
       let k = 0
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 4; j++)
-          d.setFloat32(280 + (k++) * 4, meta.affine[i][j] || 0, true)
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++) d.setFloat32(280 + (k++) * 4, meta.affine[i][j] || 0, true)
     }
-    const bytes = new Uint8Array(hdrBuf)
+    const bytes = new Uint8Array(hdr)
     bytes[344] = 110; bytes[345] = 43; bytes[346] = 49; bytes[347] = 0
-    const nifti = new Uint8Array(352 + voxelData.byteLength)
-    nifti.set(bytes, 0)
-    nifti.set(new Uint8Array(voxelData.buffer, voxelData.byteOffset, voxelData.byteLength), 352)
-    return nifti
+    const out = new Uint8Array(352 + voxelData.byteLength)
+    out.set(bytes)
+    out.set(new Uint8Array(voxelData.buffer, voxelData.byteOffset, voxelData.byteLength), 352)
+    return out
   }
 
-  // ===== hash check =====
-
-  async function handleHashHello(peerId, remoteHash) {
-    const peer = state.peers.get(peerId)
-    if (!peer) return
-    const localHash = await hashVolume()
-    // null hashes mean no volume loaded on that side treat as match
-    const match = localHash === remoteHash || (!localHash && !remoteHash)
-    try { peer.channel.send(JSON.stringify({ type: 'hash-ack', match })) } catch (e) {}
-    // show hint on the side that received the hello
-    Boostlet.hint(match ? 'peer connected' : 'volumes differ on peers use dropbox to share', match ? 2000 : 6000)
-  }
-
-  // ===== pusher signaling =====
+  // ===== pusher + webrtc =====
 
   function connectToRoom(code) {
-    // pusher presence channels give us room membership for free
-    // client events (client-offer client-answer client-ice) carry webrtc signaling
-    // no custom websocket server needed
     const pusher = new Pusher(PUSHER_KEY, {
       cluster: PUSHER_CLUSTER,
       authEndpoint: PUSHER_AUTH_URL,
-      auth: {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
+      auth: { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     })
-
     state.pusher = pusher
-
     const channel = pusher.subscribe(`presence-boostlet-${code}`)
     state.channel = channel
 
-    // fired once when our subscription succeeds
-    // members.me.id is our pusher assigned socket id
-    channel.bind('pusher:subscription_succeeded', (members) => {
+    channel.bind('pusher:subscription_succeeded', members => {
       state.selfId = members.me.id
-
-      // initiate offers to peers already in the room if our id is greater
-      // tiebreaker ensures only one side offers to avoid double offer race
-      members.each(member => {
-        if (member.id !== state.selfId) {
-          if (parseFloat(state.selfId) > parseFloat(member.id)) makeOffer(member.id)
-          else getPeer(member.id, false)
-        }
+      members.each(m => {
+        if (m.id === state.selfId) return
+        if (parseFloat(state.selfId) > parseFloat(m.id)) makeOffer(m.id)
+        else getPeer(m.id, false)
       })
     })
 
-    channel.bind('pusher:subscription_error', () => {
-      Boostlet.hint('could not join sync room', 4000)
+    channel.bind('pusher:subscription_error', () => Boostlet.hint('could not join sync room', 4000))
+    channel.bind('pusher:member_added', m => {
+      if (parseFloat(state.selfId) > parseFloat(m.id)) makeOffer(m.id)
+      else getPeer(m.id, false)
     })
-
-    // new peer joined so we send them an offer if our id is greater
-    channel.bind('pusher:member_added', (member) => {
-      if (parseFloat(state.selfId) > parseFloat(member.id)) makeOffer(member.id)
-      else getPeer(member.id, false)
-    })
-
-    // peer left so clean up their rtc connection
-    channel.bind('pusher:member_removed', (member) => {
-      removePeer(member.id)
-    })
-
-    // webrtc signaling via pusher client events
-    channel.bind('client-offer', (data) => {
-      if (data.to !== state.selfId) return
-      handleOffer(data.from, data.payload)
-    })
-
-    channel.bind('client-answer', (data) => {
-      if (data.to !== state.selfId) return
-      handleAnswer(data.from, data.payload)
-    })
-
-    channel.bind('client-ice', (data) => {
-      if (data.to !== state.selfId) return
-      handleIce(data.from, data.payload)
-    })
+    channel.bind('pusher:member_removed', m => removePeer(m.id))
+    channel.bind('client-offer', d => { if (d.to === state.selfId) handleOffer(d.from, d.payload) })
+    channel.bind('client-answer', d => { if (d.to === state.selfId) handleAnswer(d.from, d.payload) })
+    channel.bind('client-ice', d => { if (d.to === state.selfId) handleIce(d.from, d.payload) })
 
     startBroadcasting()
   }
 
   function sendSignal(type, to, payload) {
-    if (!state.channel) return
-    // client- prefix is required for pusher client events
-    state.channel.trigger(`client-${type}`, { from: state.selfId, to, payload })
+    state.channel?.trigger(`client-${type}`, { from: state.selfId, to, payload })
   }
 
-  // ===== webrtc =====
-
   function startBroadcasting() {
-    let last = { crosshairPos: null, sliceType: null, colormap: null, cal_min: null, cal_max: null }
+    let last = {}
     let lastCrosshairBroadcast = 0
-
     const tick = () => {
       state.rafId = requestAnimationFrame(tick)
+      if (state.applyingRemote) return
       const cur = readScene(false)
-
-      if (state.applyingRemote) { last = cur; return }
-
       const now = Date.now()
       const patch = {}
-
-      const crosshairChanged = cur.crosshairPos && (!last.crosshairPos ||
-        cur.crosshairPos.some((v, i) => v !== last.crosshairPos[i]))
-      if (crosshairChanged && now - lastCrosshairBroadcast >= 33) {
-        patch.crosshairPos = cur.crosshairPos
-        last.crosshairPos = cur.crosshairPos
-        lastCrosshairBroadcast = now
-      }
+      const crosshairChanged = cur.crosshairPos && (!last.crosshairPos || cur.crosshairPos.some((v, i) => v !== last.crosshairPos[i]))
+      if (crosshairChanged && now - lastCrosshairBroadcast >= 33) { patch.crosshairPos = cur.crosshairPos; last.crosshairPos = cur.crosshairPos; lastCrosshairBroadcast = now }
       if (cur.sliceType !== last.sliceType) { patch.sliceType = cur.sliceType; last.sliceType = cur.sliceType }
       if (cur.colormap !== last.colormap) { patch.colormap = cur.colormap; last.colormap = cur.colormap }
-      if (cur.cal_min !== last.cal_min || cur.cal_max !== last.cal_max) {
-        patch.cal_min = cur.cal_min; patch.cal_max = cur.cal_max
-        last.cal_min = cur.cal_min; last.cal_max = cur.cal_max
-      }
+      if (cur.cal_min !== last.cal_min || cur.cal_max !== last.cal_max) { patch.cal_min = cur.cal_min; patch.cal_max = cur.cal_max; last.cal_min = cur.cal_min; last.cal_max = cur.cal_max }
       if (Object.keys(patch).length) broadcast({ type: 'scene-patch', patch })
     }
     state.rafId = requestAnimationFrame(tick)
@@ -619,8 +373,6 @@
 
   async function makeOffer(peerId) {
     if (!peerId || peerId === state.selfId) return
-    // tiebreaker so only one side offers when both peers join simultaneously
-    // parse as float since pusher ids are strings like "1611570.28373"
     if (parseFloat(state.selfId) < parseFloat(peerId)) return
     const peer = getPeer(peerId, true)
     if (peer.conn.signalingState !== 'stable') return
@@ -665,11 +417,9 @@
     const conn = new RTCPeerConnection(ICE_CONFIG)
     const peer = { conn, channel: null, pendingCandidates: [], remoteDescSet: false }
     state.peers.set(peerId, peer)
-    conn.onicecandidate = (e) => { if (e.candidate) sendSignal('ice', peerId, e.candidate) }
-    conn.ondatachannel = (e) => wireChannel(peerId, e.channel)
-    conn.onconnectionstatechange = () => {
-      if (conn.connectionState === 'failed' || conn.connectionState === 'closed') removePeer(peerId)
-    }
+    conn.onicecandidate = e => { if (e.candidate) sendSignal('ice', peerId, e.candidate) }
+    conn.ondatachannel = e => wireChannel(peerId, e.channel)
+    conn.onconnectionstatechange = () => { if (conn.connectionState === 'failed' || conn.connectionState === 'closed') removePeer(peerId) }
     if (createChannel) wireChannel(peerId, conn.createDataChannel('boostlet-sync'))
     return peer
   }
@@ -684,13 +434,20 @@
       try { channel.send(JSON.stringify({ type: 'hash-hello', hash })) } catch (e) {}
     }
 
-    channel.onmessage = (e) => {
+    channel.onmessage = e => {
       if (typeof e.data !== 'string') return
       let msg; try { msg = JSON.parse(e.data) } catch { return }
 
-      if (msg.type === 'hash-hello') { handleHashHello(peerId, msg.hash); return }
+      if (msg.type === 'hash-hello') {
+        hashVolume().then(localHash => {
+          const match = localHash === msg.hash || (!localHash && !msg.hash)
+          try { channel.send(JSON.stringify({ type: 'hash-ack', match })) } catch (e) {}
+          Boostlet.hint(match ? 'peer connected' : 'volumes differ — use dropbox to share', match ? 2000 : 6000)
+        })
+        return
+      }
       if (msg.type === 'hash-ack') {
-        Boostlet.hint(msg.match ? 'peer connected' : 'volumes differ on peers use dropbox to share', msg.match ? 2000 : 6000)
+        Boostlet.hint(msg.match ? 'peer connected' : 'volumes differ — use dropbox to share', msg.match ? 2000 : 6000)
         return
       }
       if (msg.type === 'scene-patch') {
@@ -699,71 +456,49 @@
         setTimeout(() => { state.applyingRemote = false }, 0)
         return
       }
-      if (msg.type === 'volume-ready') {
-        const nv = state.nv
-        if (!nv.volumes?.length && msg.volumeUrl) {
-          Boostlet.hint('loading volume from dropbox', 3000)
-          nv.loadVolumes([{ url: msg.volumeUrl }]).then(() => {
-            // apply the host scene state immediately after load
-            // so the joiner lands on the same slice instead of nifti defaults
-            if (msg.scene) {
-              state.applyingRemote = true
-              applyDiff(msg.scene)
-              setTimeout(() => { state.applyingRemote = false }, 0)
-            }
-          }).catch(() => {
-            Boostlet.hint('could not load volume from dropbox', 4000)
-          })
-        }
+      if (msg.type === 'volume-ready' && !state.nv.volumes?.length && msg.volumeUrl) {
+        Boostlet.hint('loading volume from dropbox', 3000)
+        state.nv.loadVolumes([{ url: msg.volumeUrl }]).then(() => {
+          if (msg.scene) { state.applyingRemote = true; applyDiff(msg.scene); setTimeout(() => { state.applyingRemote = false }, 0) }
+        }).catch(() => Boostlet.hint('could not load volume from dropbox', 4000))
         return
       }
       routeMessage(msg)
     }
 
-    channel.onclose = () => {
-      if (peer.channel === channel) { peer.channel = null }
-    }
+    channel.onclose = () => { if (peer.channel === channel) peer.channel = null }
   }
 
   function broadcast(msg) {
     const str = JSON.stringify(msg)
-    state.peers.forEach(peer => {
-      if (peer.channel?.readyState === 'open') {
-        try { peer.channel.send(str) } catch (e) {}
-      }
-    })
+    state.peers.forEach(peer => { if (peer.channel?.readyState === 'open') try { peer.channel.send(str) } catch (e) {} })
   }
 
   function removePeer(peerId) {
     const peer = state.peers.get(peerId)
     if (!peer) return
-    peer.channel?.close()
-    peer.conn.close()
+    peer.channel?.close(); peer.conn.close()
     state.peers.delete(peerId)
     Boostlet.hint('peer disconnected', 2000)
   }
 
-  // ===== boostlet bus =====
+  // =====  hop on the boostlet bus =====
 
   window.__boostlet_active = window.__boostlet_active || []
-
   window.registerBoostletSync = function (entry) {
     const idx = window.__boostlet_active.findIndex(e => e.name === entry.name)
     if (idx !== -1) window.__boostlet_active[idx] = entry
     else window.__boostlet_active.push(entry)
   }
-
   function routeMessage(msg) {
     if (!msg?.type) return
-    for (const entry of window.__boostlet_active) {
-      if (typeof entry.onMessage === 'function') entry.onMessage(msg)
-    }
+    for (const entry of window.__boostlet_active) if (typeof entry.onMessage === 'function') entry.onMessage(msg)
   }
 
-  // ===== sync panel =====
+  // ===== ui =====
 
-  const PANEL_CSS = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;background:#111;border:1.5px solid #444;border-radius:8px;padding:10px 12px;font-family:monospace;font-size:12px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,.6);min-width:180px'
-  const BTN_CSS = 'border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-family:monospace;font-size:11px'
+  const PANEL = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;background:#111;border:1.5px solid #444;border-radius:8px;padding:10px 12px;font-family:monospace;font-size:12px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,.6);min-width:180px'
+  const BTN = 'border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-family:monospace;font-size:11px'
 
   function el(tag, css, text) {
     const e = document.createElement(tag)
@@ -774,88 +509,59 @@
 
   function showPanel() {
     if (document.getElementById('__sync_panel')) return
-    const panel = el('div', PANEL_CSS)
+    const panel = el('div', PANEL)
     panel.id = '__sync_panel'
-
-    const close = el('button', 'position:absolute;top:6px;right:8px;background:none;border:none;color:#666;font-size:14px;cursor:pointer', '\u00d7')
+    const close = el('button', 'position:absolute;top:6px;right:8px;background:none;border:none;color:#666;font-size:14px;cursor:pointer', '×')
     close.onclick = () => panel.remove()
-
     const status = el('div', 'font-size:11px;color:#666', 'starting...')
     status.id = '__sync_status'
-
     const input = el('input', 'background:#222;color:#fff;border:1px solid #444;border-radius:4px;padding:4px 6px;font-family:monospace;font-size:12px;width:70px;outline:none')
     input.placeholder = 'xxxxx'; input.maxLength = 8
-
-    const joinBtn = el('button', `${BTN_CSS};background:#1a3a6a;color:#fff`, 'join')
+    const joinBtn = el('button', `${BTN};background:#1a3a6a;color:#fff`, 'join')
     joinBtn.onclick = () => {
       const code = input.value.trim().toLowerCase()
       if (!code) return
       joinBtn.disabled = true
       joinScene(code).catch(() => { joinBtn.disabled = false })
     }
-    input.onkeydown = (e) => { if (e.key === 'Enter') joinBtn.click() }
-
+    input.onkeydown = e => { if (e.key === 'Enter') joinBtn.click() }
     const row = el('div', 'display:flex;gap:6px')
     row.append(input, joinBtn)
-
-    panel.append(
-      close,
-      el('div', 'font-size:11px;color:#888;letter-spacing:.05em', 'boostlet sync'),
-      status,
-      el('div', 'border-top:1px solid #333;margin:2px 0'),
-      el('div', 'font-size:11px;color:#888', 'join with code'),
-      row
-    )
+    panel.append(close, el('div', 'font-size:11px;color:#888;letter-spacing:.05em', 'boostlet sync'), status, el('div', 'border-top:1px solid #333;margin:2px 0'), el('div', 'font-size:11px;color:#888', 'join with code'), row)
     document.body.appendChild(panel)
   }
 
   function updatePanel(code) {
-    const shareUrl = `${location.origin}${location.pathname}?sync=${code}`
     const status = document.getElementById('__sync_status')
     if (!status) return
-
-    const copyBtn = el('button', `${BTN_CSS};background:#1a3a1a;color:#8c8;border:1px solid #4a4`, 'copy link')
-    copyBtn.onclick = () => navigator.clipboard.writeText(shareUrl).then(() => {
-      copyBtn.textContent = 'copied'
-      setTimeout(() => { copyBtn.textContent = 'copy link' }, 1500)
-    })
-
-    const row = el('div', 'display:flex;flex-direction:column;gap:6px')
+    const shareUrl = `${location.origin}${location.pathname}?sync=${code}`
+    const copyBtn = el('button', `${BTN};background:#1a3a1a;color:#8c8;border:1px solid #4a4`, 'copy link')
+    copyBtn.onclick = () => navigator.clipboard.writeText(shareUrl).then(() => { copyBtn.textContent = 'copied'; setTimeout(() => { copyBtn.textContent = 'copy link' }, 1500) })
     const codeRow = el('div', 'display:flex;align-items:center;gap:8px')
     codeRow.append(el('span', 'color:#4a4;letter-spacing:.1em;font-size:13px', code), copyBtn)
+    const row = el('div', 'display:flex;flex-direction:column;gap:6px')
     row.append(codeRow)
-
     if (DROPBOX_APP_KEY) {
-      const dropboxBtn = el('button', `${BTN_CSS};background:#0061fe;color:#fff;margin-top:2px`, 'save volume to dropbox')
-      dropboxBtn.onclick = async () => {
-        dropboxBtn.disabled = true
-        dropboxBtn.textContent = 'uploading...'
-        await uploadVolumeToDropbox()
-        dropboxBtn.disabled = false
-        dropboxBtn.textContent = 'save volume to dropbox'
-      }
-      row.append(dropboxBtn)
+      const btn = el('button', `${BTN};background:#0061fe;color:#fff;margin-top:2px`, 'save volume to dropbox')
+      btn.onclick = async () => { btn.disabled = true; btn.textContent = 'uploading...'; await uploadVolumeToDropbox(); btn.disabled = false; btn.textContent = 'save volume to dropbox' }
+      row.append(btn)
     }
-
     status.replaceWith(row)
   }
 
   function promptBoostlets(boostlets) {
     const missing = boostlets.filter(b => !(window.__boostlet_active || []).find(a => a.name === b.name))
     if (!missing.length) return
-
     const prompt = el('div', 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#111;border:1.5px solid #444;border-radius:8px;padding:12px 16px;font-family:monospace;font-size:12px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:8px;max-width:320px')
     prompt.append(el('div', 'font-size:11px;color:#888', 'host has these boostlets active'))
-
     for (const b of missing) {
-      const btn = el('button', `${BTN_CSS};background:#1a3a6a;color:#fff`, 'load')
+      const btn = el('button', `${BTN};background:#1a3a6a;color:#fff`, 'load')
       btn.onclick = () => { Boostlet.load_script(b.url, () => {}); btn.textContent = 'loaded'; btn.disabled = true }
       const row = el('div', 'display:flex;justify-content:space-between;align-items:center;gap:12px')
       row.append(el('span', null, b.name), btn)
       prompt.appendChild(row)
     }
-
-    const dismiss = el('button', `${BTN_CSS};background:none;border:1px solid #444;color:#666;align-self:flex-end`, 'dismiss')
+    const dismiss = el('button', `${BTN};background:none;border:1px solid #444;color:#666;align-self:flex-end`, 'dismiss')
     dismiss.onclick = () => prompt.remove()
     prompt.appendChild(dismiss)
     document.body.appendChild(prompt)
@@ -865,10 +571,7 @@
   // ===== utils =====
 
   function isSamePage(a, b) {
-    try {
-      const ua = new URL(a), ub = new URL(b)
-      return ua.origin + ua.pathname === ub.origin + ub.pathname
-    } catch { return false }
+    try { const ua = new URL(a), ub = new URL(b); return ua.origin + ua.pathname === ub.origin + ub.pathname } catch { return false }
   }
 
 })()

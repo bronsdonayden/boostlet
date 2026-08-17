@@ -3,7 +3,8 @@
   window.__onnx_demo_active = true
 
   const BOOSTLET_URL = 'https://boostlet.org/dist/boostlet.min.js'
-  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
+  const ORT_VERSION = '1.20.1'
+  const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@' + ORT_VERSION + '/dist/'
   const FALLBACK_SIZE = 256
 
   function loadScript(src) {
@@ -23,8 +24,11 @@
     if (!window.ort) {
       await loadScript(ORT_BASE + 'ort.min.js')
       ort.env.wasm.numThreads = 1
-      ort.env.wasm.simd = false
-      ort.env.wasm.wasmPaths = ORT_BASE
+      ort.env.wasm.wasmPaths = {
+        'ort-wasm-simd-threaded.wasm': ORT_BASE + 'ort-wasm-simd-threaded.wasm',
+        'ort-wasm-simd.wasm': ORT_BASE + 'ort-wasm-simd.wasm',
+        'ort-wasm.wasm': ORT_BASE + 'ort-wasm.wasm',
+      }
     }
     showDropzone()
   }
