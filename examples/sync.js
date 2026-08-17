@@ -574,4 +574,4 @@
     try { const ua = new URL(a), ub = new URL(b); return ua.origin + ua.pathname === ub.origin + ub.pathname } catch { return false }
   }
 
-})()
+})() //
