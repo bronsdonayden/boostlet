@@ -181,12 +181,9 @@
       }).catch(() => {})
     }
 
-    // patch dropbox scene snapshot every 3s with current display state
-    state.patchInterval = setInterval(async () => {
-      const s = readScene(false)
-      s.activeBoostlets = (window.__boostlet_active || []).map(({ name, url }) => ({ name, url }))
-      await writeSceneToDropbox(code, s)
-    }, 3000)
+    // no patch interval needed
+    // live scene state syncs over webrtc once peers connect
+    // dropbox scene snapshot only updates when the host explicitly saves the volume
   }
 
   async function joinScene(code) {
