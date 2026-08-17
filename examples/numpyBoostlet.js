@@ -221,19 +221,15 @@ function plot() {
 // Boostlet.from_np(arr) write ndarray back and rerender
 // np                    numpyts
 
-// example 1 threshold in display space
-const vol = Boostlet.nv.volumes[0]
-const slope = vol.hdr.scl_slope || 1
-const inter = vol.hdr.scl_inter || 0
-const displayThresh = 200
-const rawThresh = (displayThresh - inter) / slope
+// example 1 scale
 const arr = Boostlet.to_np()
-const mask = np.greater(arr, np.array([rawThresh], 'float32'))
-Boostlet.from_np(np.multiply(arr, mask))
+Boostlet.from_np(np.multiply(arr, np.array([2.0], 'float32')))
 
-// example 2 scale
+// example 2 threshold
 // const arr = Boostlet.to_np()
-// Boostlet.from_np(np.multiply(arr, np.array([2.0], 'float32')))`,
+// const thresh = 500
+// const mask = np.greater(arr, np.array([thresh], 'float32'))
+// Boostlet.from_np(np.multiply(arr, mask))`,
     -1
   );
   window._numpyEditor = editor;
