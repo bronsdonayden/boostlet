@@ -215,26 +215,25 @@ function plot() {
   editor.setFontSize(13);
   editor.setOption('wrap', true);
   editor.setValue(
-`// Available API:
-//   Boostlet.nv          — the live NiiVue instance
-//   Boostlet.to_np()     — wraps vol.img into a numpyts ndarray
-//   Boostlet.from_np(arr)— writes an ndarray or typed array back and re-renders
-//   np                   — numpyts, loaded globally
+`// available api
+//   Boostlet.nv           the live niivue instance
+//   Boostlet.to_np()      wraps vol.img into a numpyts ndarray
+//   Boostlet.from_np(arr) writes an ndarray or typed array back and rerenders
+//   np                    numpyts loaded globally
 
-// --- Example 1: plain typed-array manipulation (no np needed) ---
-const vol = Boostlet.nv.volumes[0];
-const img = vol.img;
+// example 1 scale using numpyts
+const arr = Boostlet.to_np();
+const scaled = np.multiply(arr, np.array([2.0], 'float32'));
+Boostlet.from_np(scaled);
 
-// clamp every voxel to half its current value
-for (let i = 0; i < img.length; i++) {
-  img[i] = img[i] * 0.5;
-}
-Boostlet.nv.updateGLVolume();
-
-// --- Example 2: using numpyts ---
+// example 2 threshold using numpyts
+// zeros out all voxels below a raw value threshold
+// adjust thresh to taste
 // const arr = Boostlet.to_np();
-// const scaled = np.multiply(arr, np.array([2.0], 'float32'));
-// Boostlet.from_np(scaled);`,
+// const thresh = 500;
+// const mask = np.greater(arr, np.array([thresh], 'float32'));
+// const result = np.multiply(arr, mask);
+// Boostlet.from_np(result);`,
     -1
   );
   window._numpyEditor = editor;
