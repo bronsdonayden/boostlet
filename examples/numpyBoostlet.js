@@ -75,7 +75,7 @@ async function setup() {
   window.np = await import(NUMPY_TS_URL);
 
   // wraps the full volume typed array into a numpyts ndarray
-  // no slope or intercept applied here
+  // no slope or intercept applied here so values are raw voxel units
   Boostlet.to_np = function() {
     const img = Boostlet.nv.volumes[0].img;
     return np.array(Array.from(img), 'float32');
@@ -217,23 +217,34 @@ function plot() {
   editor.setValue(
 `// available api
 //   Boostlet.nv           the live niivue instance
-//   Boostlet.to_np()      wraps vol.img into a numpyts ndarray
-//   Boostlet.from_np(arr) writes an ndarray or typed array back and rerenders
+//   Boostlet.to_np()      wraps vol.img as a float32 numpyts ndarray (raw voxel values)
+//   Boostlet.from_np(arr) writes an ndarray or typed array back into vol.img and rerenders
 //   np                    numpyts loaded globally
 
-// example 1 scale using numpyts
+// note on raw vs display values
+//   vol.img stores raw voxel values not display values
+//   nifti volumes map raw to display via: display = raw * slope + inter
+//   where slope = vol.hdr.scl_slope and inter = vol.hdr.scl_inter
+//   on openneuro volumes slope is often around 0.02 and inter around 645
+//   so raw values look like large integers or negatives even though the display looks normal
+//   if you want to threshold or compare in display units convert first then invert before writing back
+
+// example 1 scale raw values by 2
+// works as expected when slope=1 inter=0 (e.g. ultrasound or simple volumes)
 const arr = Boostlet.to_np();
 const scaled = np.multiply(arr, np.array([2.0], 'float32'));
 Boostlet.from_np(scaled);
 
-// example 2 threshold using numpyts
-// zeros out all voxels below a raw value threshold
-// adjust thresh to taste
-// const arr = Boostlet.to_np();
-// const thresh = 500;
-// const mask = np.greater(arr, np.array([thresh], 'float32'));
-// const result = np.multiply(arr, mask);
-// Boostlet.from_np(result);`,
+// example 2 threshold in display space (correct for openneuro volumes)
+// const vol = Boostlet.nv.volumes[0]
+// const slope = vol.hdr.scl_slope || 1
+// const inter = vol.hdr.scl_inter || 0
+// const displayThresh = 200  // adjust to taste in display units
+// const rawThresh = (displayThresh - inter) / slope
+// const arr = Boostlet.to_np()
+// const mask = np.greater(arr, np.array([rawThresh], 'float32'))
+// const result = np.multiply(arr, mask)
+// Boostlet.from_np(result)`,
     -1
   );
   window._numpyEditor = editor;
