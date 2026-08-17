@@ -32,7 +32,8 @@ const syncEntry = {
       applyRemoteCode(msg.code)
     }
     if (msg.type === 'numpy-run') {
-      applyRemoteCode(msg.code)
+      // run what is in the local editor only
+      // never execute code from the message payload
       runCode(false)
     }
     if (msg.type === 'numpy-undo') {
@@ -120,7 +121,7 @@ function runCode(broadcastRun) {
   new AsyncFunction(code)().then(() => {
     console.log = origLog;
     if (broadcastRun && typeof window.__sync_send === 'function') {
-      window.__sync_send({ type: 'numpy-run', code })
+      window.__sync_send({ type: 'numpy-run' })
     }
   }).catch(err => {
     outputDiv.innerHTML += '<span style="color:#f77">' + err.toString() + '</span>';
@@ -215,36 +216,24 @@ function plot() {
   editor.setFontSize(13);
   editor.setOption('wrap', true);
   editor.setValue(
-`// available api
-//   Boostlet.nv           the live niivue instance
-//   Boostlet.to_np()      wraps vol.img as a float32 numpyts ndarray (raw voxel values)
-//   Boostlet.from_np(arr) writes an ndarray or typed array back into vol.img and rerenders
-//   np                    numpyts loaded globally
+`// Boostlet.nv           live niivue instance
+// Boostlet.to_np()      vol.img as float32 ndarray (raw voxel values)
+// Boostlet.from_np(arr) write ndarray back and rerender
+// np                    numpyts
 
-// note on raw vs display values
-//   vol.img stores raw voxel values not display values
-//   nifti volumes map raw to display via: display = raw * slope + inter
-//   where slope = vol.hdr.scl_slope and inter = vol.hdr.scl_inter
-//   on openneuro volumes slope is often around 0.02 and inter around 645
-//   so raw values look like large integers or negatives even though the display looks normal
-//   if you want to threshold or compare in display units convert first then invert before writing back
+// example 1 threshold in display space
+const vol = Boostlet.nv.volumes[0]
+const slope = vol.hdr.scl_slope || 1
+const inter = vol.hdr.scl_inter || 0
+const displayThresh = 200
+const rawThresh = (displayThresh - inter) / slope
+const arr = Boostlet.to_np()
+const mask = np.greater(arr, np.array([rawThresh], 'float32'))
+Boostlet.from_np(np.multiply(arr, mask))
 
-// example 1 scale raw values by 2
-// works as expected when slope=1 inter=0 (e.g. ultrasound or simple volumes)
-const arr = Boostlet.to_np();
-const scaled = np.multiply(arr, np.array([2.0], 'float32'));
-Boostlet.from_np(scaled);
-
-// example 2 threshold in display space (correct for openneuro volumes)
-// const vol = Boostlet.nv.volumes[0]
-// const slope = vol.hdr.scl_slope || 1
-// const inter = vol.hdr.scl_inter || 0
-// const displayThresh = 200  // adjust to taste in display units
-// const rawThresh = (displayThresh - inter) / slope
+// example 2 scale
 // const arr = Boostlet.to_np()
-// const mask = np.greater(arr, np.array([rawThresh], 'float32'))
-// const result = np.multiply(arr, mask)
-// Boostlet.from_np(result)`,
+// Boostlet.from_np(np.multiply(arr, np.array([2.0], 'float32')))`,
     -1
   );
   window._numpyEditor = editor;
